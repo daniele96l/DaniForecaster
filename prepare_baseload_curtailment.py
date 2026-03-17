@@ -126,10 +126,9 @@ def run_optimization():
             # Find baseload that gives ~10% curtailment
             B = find_baseload(P, target_curtailment=0.10)
 
-            # Hourly shortfall vs baseload (same logic as Prod_vs_PromisedBaseload)
-            # Positive values mean under-production relative to baseload; over-production is not penalized here.
-            min_hourly_production = float(np.min(P))
-            if B > best_B and min_hourly_production >= hourly_t * B:
+            # OLD: min_hourly_production >= 0.9 * B
+            daily_avg_production = np.mean(P)
+            if B > best_B and daily_avg_production >= 0.7 * B:
                 print(
                     "New best: B={:.2f} MW (S={:.1f} MW, W={:.1f} MW), "
                     "max_hourly_shortfall={:.3f}".format(
@@ -165,7 +164,7 @@ def run_optimization():
     # Instantaneous error vs promised baseload (fraction of baseload)
     # > 0 means under-producing vs baseload, < 0 means over-producing
     prod_error = (best_B - P_optimal) / best_B
-    overall["Prod_vs_PromisedBaseload"] = np.round(prod_error, 4)
+    overall["Prod_vs_PromisedBaseload_hourly"] = np.round(prod_error, 4)
 
     # Ensure original averaged wind column has at most 2 decimals
     overall[wind_col] = np.round(overall[wind_col].astype(float), 2)
