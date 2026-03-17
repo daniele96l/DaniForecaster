@@ -71,9 +71,19 @@ def find_baseload(production, target_curtailment=0.10):
 # ============================================================================
 
 def run_optimization():
-    """Main optimization routine."""
+    """
+    Main optimization routine.
 
+    We grid-search solar/wind capacities (S, W) and:
+    - for each pair, compute the baseload B with ~10% curtailment,
+    - require that average production >= 70% of B,
+    - pick the pair with the highest feasible B,
+    - write all results to Overall_with_baseload.csv.
+    """
+
+    print("Loading input data from Overall.csv ...")
     overall = pd.read_csv("Overall.csv")
+    print(f"Loaded {len(overall)} rows.")
 
     # Find column names (case-insensitive)
     cols = {c.lower(): c for c in overall.columns}
@@ -86,14 +96,14 @@ def run_optimization():
         print(f"Available columns: {list(overall.columns)}")
         return
 
-    # Parse data
+    # Parse data and ensure we have a datetime column for daily metrics
     if not pd.api.types.is_datetime64_any_dtype(overall[date_col]):
         overall[date_col] = pd.to_datetime(overall[date_col], errors="coerce")
 
     solar_raw = overall[solar_col].astype(float).to_numpy()
     wind_raw = overall[wind_col].astype(float).to_numpy()
 
-    # Check for errors
+    # Check for obvious data issues before running the optimization
     if np.isnan(solar_raw).any() or np.isnan(wind_raw).any():
         print("ERROR: Data contains NaN values")
         return
@@ -103,6 +113,7 @@ def run_optimization():
         return
 
     # Grid search over capacities (simple 0..200 MW grid)
+    print("Starting capacity grid search over S,W in [0,200] MW (step 5 MW) ...")
     S_values = np.linspace(0, 200, 41)
     W_values = np.linspace(0, 200, 41)
 
@@ -110,7 +121,8 @@ def run_optimization():
     best_S = 0.0
     best_W = 0.0
 
-    # Loop over all (S, W) pairs
+    # Loop over all (S, W) pairs and keep the one with the
+    # highest feasible baseload B given our constraints.
     for i, S in enumerate(S_values):
         for j, W in enumerate(W_values):
             # Skip if no capacity
@@ -119,15 +131,19 @@ def run_optimization():
 
             # Compute production for this (S, W) using raw profiles
             P = S * solar_raw + W * wind_raw
-            # Find baseload that gives ~10% curtailment
+            # For this production profile, find baseload B that implies
+            # approximately 10% curtailment over the whole period.
             B = find_baseload(P, target_curtailment=0.10)
 
-            # Daily mean production constraint: daily_avg_production >= 0.7 * B
+            # Daily mean production constraint:
+            # keep only solutions where average production over the whole
+            # period is at least 70% of the baseload B.
             daily_avg_production = np.mean(P)
             if B > best_B and daily_avg_production >= 0.7 * B:
                 print(
-                    "New best: B={:.2f} MW (S={:.1f} MW, W={:.1f} MW), "
-                    "daily_avg_production={:.2f} MW".format(
+                    "New best candidate -> "
+                    "B={:.2f} MW, S={:.1f} MW, W={:.1f} MW, "
+                    "avg_prod={:.2f} MW".format(
                         B, S, W, daily_avg_production
                     )
                 )
@@ -139,6 +155,13 @@ def run_optimization():
     if best_B <= 0:
         print("ERROR: Could not find valid solution")
         return
+
+    print(
+        "Final choice -> "
+        "B={:.2f} MW, S={:.1f} MW, W={:.1f} MW".format(
+            best_B, best_S, best_W
+        )
+    )
 
     # Compute final production with best capacities on raw profiles
     P_optimal = best_S * solar_raw + best_W * wind_raw
@@ -157,8 +180,9 @@ def run_optimization():
     overall["WindScaled"] = np.round(best_W * wind_raw, 2)
     overall["ProdCombined"] = np.round(P_optimal, 2)
 
-    # Instantaneous error vs baseload (fraction of baseload)
-    # > 0 means under-producing vs baseload, < 0 means over-producing
+    # HourlyShortfall = (B - production) / B:
+    #   0.10 -> 10% below baseload
+    #  -0.05 -> 5% above baseload (negative shortfall = excess)
     prod_error = (best_B - P_optimal) / best_B
     overall["HourlyShortfall"] = np.round(prod_error, 4)
 
@@ -192,7 +216,9 @@ def run_optimization():
     ]
 
     # Save formatted dataset
+    print("Writing results to Overall_with_baseload.csv ...")
     overall.to_csv("Overall_with_baseload.csv", index=False, columns=ordered_cols)
+    print("Done.")
 
 
 # ============================================================================
