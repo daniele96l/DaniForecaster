@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Solar & Wind Viewer</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+        background: #050816;
+        color: #f9fafb;
+      }
+      .app-shell {
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+      header {
+        padding: 16px 24px;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.4);
+        background: radial-gradient(circle at top left, #1d4ed8 0, #020617 55%);
+      }
+      header h1 {
+        margin: 0;
+        font-size: 20px;
+        letter-spacing: 0.05em;
+      }
+      header p {
+        margin: 4px 0 0;
+        font-size: 13px;
+        color: #cbd5f5;
+      }
+      main {
+        flex: 1;
+        padding: 16px 24px 32px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      @media (min-width: 960px) {
+        main {
+          flex-direction: row;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root" class="app-shell"></div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
+

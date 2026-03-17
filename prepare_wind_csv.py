@@ -2,40 +2,33 @@
 
 import pandas as pd
 
-df = pd.read_excel("Wind.xlsx", header=2)
-df = df.drop(columns=['Unnamed: 25'], errors='ignore')
-df.rename(columns={df.columns[0]: 'Date'}, inplace=True)
-df['Date'] = pd.to_datetime(df['Date'])
+
+def main() -> None:
+    df = pd.read_excel("Wind.xlsx", header=2)
+    df = df.drop(columns=["Unnamed: 25"], errors="ignore")
+
+    # First column is the date
+    df.rename(columns={df.columns[0]: "Date"}, inplace=True)
+    df["Date"] = pd.to_datetime(df["Date"])
+
+    # Wide (1..24 columns) -> long with one row per hour
+    df_melted = df.melt(
+        id_vars="Date", var_name="Hour", value_name="Production, KWh"
+    )
+
+    # Use actual hour value from the column (1..24 -> 0..23)
+    df_melted["Hour"] = pd.to_numeric(df_melted["Hour"], errors="coerce")
+    df_melted["Date"] = df_melted["Date"] + pd.to_timedelta(
+        df_melted["Hour"] - 1, unit="h"
+    )
+
+    # Drop NaNs and sort by datetime before formatting
+    result = df_melted[["Date", "Production, KWh"]].dropna().sort_values("Date")
+
+    # Format as DD/MM/YYYY HH:MM
+    result["Date"] = result["Date"].dt.strftime("%d/%m/%Y %H:%M")
+    result.to_csv("Wind.csv", index=False)
 
 
-"""
-           Date       1       2       3  ...      21      22      23      24
-0    2020-01-01  28.545  26.136  21.021  ...  22.242  25.542  16.731  20.361
-1    2020-01-02  27.621  34.353  33.660  ...  41.910  41.943  39.699  40.029
-2    2020-01-03  40.656  40.755  41.019  ...  41.910  41.910  38.775  38.709
-3    2020-01-04  38.511  39.270  28.677  ...  41.943  41.910  39.765  40.095
-4    2020-01-05  39.138  38.478  41.151  ...  29.997  25.113  19.305  26.565
-...         ...     ...     ...     ...  ...     ...     ...     ...     ...
-1091 2022-12-27  32.307  29.667  32.307  ...  41.943  40.689  39.369  39.666
-1092 2022-12-28  40.293  39.105  37.752  ...  41.943  41.943  38.940  39.864
-1093 2022-12-29  38.577  39.534  39.072  ...  41.943  40.524  39.468  40.260
-1094 2022-12-30  40.095  39.600  38.907  ...  39.468  41.943  39.501  40.392
-1095 2022-12-31  37.620  35.409  35.376  ...  41.943  41.943  39.468  40.491
-[1096 rows x 25 columns]
-"""
-
-
-"""Desirede output
-
-Date,"Production, KWh"
-01/01/1990 00:00,0
-01/01/1990 01:00,0
-01/01/1990 02:00,0
-01/01/1990 03:00,0
-01/01/1990 04:00,0
-01/01/1990 05:00,0
-01/01/1990 06:00,0
-01/01/1990 07:00,0
-01/01/1990 08:00,-0.5
-01/01/1990 09:00,310.87
-01/01/1990 10:00,683.36"""
+if __name__ == "__main__":
+    main()
