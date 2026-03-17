@@ -57,6 +57,30 @@ def main() -> None:
     ]
     result.to_csv("Wind.csv", index=False)
 
+    # Build overall CSV with solar production and average wind production
+    solar = pd.read_csv("Solar.CSV")
+    solar["Date"] = pd.to_datetime(solar["Date"], dayfirst=True)
+    solar["Month"] = solar["Date"].dt.month
+    solar["Day"] = solar["Date"].dt.day
+    solar["HourOfDay"] = solar["Date"].dt.hour
+
+    merged = solar.merge(
+        grouped[["Month", "Day", "HourOfDay", "Production, KWh"]],
+        on=["Month", "Day", "HourOfDay"],
+        how="left",
+        suffixes=("_solar", "_wind"),
+    )
+
+    overall = merged[
+        ["Date", "Production, KWh_solar", "Production, KWh_wind"]
+    ].rename(
+        columns={
+            "Production, KWh_solar": "Solar Production, KWh",
+            "Production, KWh_wind": "Wind Production, KWh (avg)",
+        }
+    )
+    overall.to_csv("Overall.csv", index=False)
+
 
 if __name__ == "__main__":
     main()
