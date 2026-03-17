@@ -73,35 +73,8 @@ def find_baseload(production, target_curtailment=0.10):
 
 
 def compute_production(solar, wind, solar_capacity, wind_capacity):
-    """
-    Compute combined production: P = S*solar + W*wind
-
-    Args:
-        solar: normalized solar profile (0-1)
-        wind: normalized wind profile (0-1)
-        solar_capacity: solar scaling factor
-        wind_capacity: wind scaling factor
-
-    Returns:
-        production array
-    """
+    """Compute combined production: P = S*solar + W*wind using raw profiles."""
     return solar_capacity * solar + wind_capacity * wind
-
-
-def normalize_profile(profile):
-    """
-    Normalize a profile to [0, 1] range.
-
-    Args:
-        profile: numpy array
-
-    Returns:
-        normalized array
-    """
-    max_val = np.max(profile)
-    if max_val <= 0:
-        return profile
-    return profile / max_val
 
 
 # ============================================================================
@@ -140,10 +113,6 @@ def run_optimization():
         print("ERROR: No positive values in solar or wind data")
         return
 
-    # Normalize
-    solar_norm = normalize_profile(solar_raw)
-    wind_norm = normalize_profile(wind_raw)
-
     # Grid search over capacities (simple 0..200 MW grid)
     S_values = np.linspace(0, 200, 41)
     W_values = np.linspace(0, 200, 41)
@@ -159,34 +128,31 @@ def run_optimization():
             if S == 0 and W == 0:
                 continue
 
-            # Compute production for this (S, W)
-            P = compute_production(solar_norm, wind_norm, S, W)
+            # Compute production for this (S, W) using raw profiles
+            P = compute_production(solar_raw, wind_raw, S, W)
 
             # Find baseload that gives ~10% curtailment
             B = find_baseload(P, target_curtailment=0.10)
-            curtailment = compute_curtailment_ratio(P, B)
-
             # Keep track of best
+            print("Baseload search: S={:.1f} MW, W={:.1f} MW => B={:.2f} MW".format(S, W, B))
             if B > best_B:
                 best_B = B
                 best_S = S
                 best_W = W
-                best_curtailment = curtailment
 
     if best_B <= 0:
         print("ERROR: Could not find valid solution")
         return
 
-    # Compute final production
-    P_optimal = compute_production(solar_norm, wind_norm, best_S, best_W)
+    # Compute final production with best capacities on raw profiles
+    P_optimal = compute_production(solar_raw, wind_raw, best_S, best_W)
 
     # Add to dataframe (rounded to 2 decimal places)
     overall["SolarScalingFactor"] = np.round(best_S, 2)
     overall["WindScalingFactor"] = np.round(best_W, 2)
-    overall["SolarScaled"] = np.round(best_S * solar_norm, 2)
-    overall["WindScaled"] = np.round(best_W * wind_norm, 2)
+    overall["SolarScaled"] = np.round(best_S * solar_raw, 2)
+    overall["WindScaled"] = np.round(best_W * wind_raw, 2)
     overall["ProductionCombined"] = np.round(P_optimal, 2)
-    overall["Baseload"] = np.round(best_B, 2)
 
     # Ensure original averaged wind column has at most 2 decimals
     overall[wind_col] = np.round(overall[wind_col].astype(float), 2)
@@ -198,7 +164,7 @@ def run_optimization():
         columns=[
             col
             for col in overall.columns
-            if col not in ("Curtailment", "CurtailmentRatio")
+            if col not in ("Curtailment", "CurtailmentRatio", "Baseload")
         ],
     )
 
