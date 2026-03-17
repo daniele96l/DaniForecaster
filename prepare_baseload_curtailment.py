@@ -144,9 +144,14 @@ def run_optimization():
     solar_norm = normalize_profile(solar_raw)
     wind_norm = normalize_profile(wind_raw)
 
-    # Grid search over capacities
-    S_values = np.linspace(0, 200, 41)
-    W_values = np.linspace(0, 200, 41)
+    # Grid search over capacities based on average production levels
+    # Use multiples of the average normalized values
+    avg_solar = float(np.mean(solar_norm))
+    avg_wind = float(np.mean(wind_norm))
+
+    factors = np.linspace(0.0, 50.0, 101)  # 0x .. 50x average
+    S_values = factors * avg_solar
+    W_values = factors * avg_wind
 
     best_B = -np.inf
     best_S = 0.0
