@@ -77,7 +77,7 @@ def run_optimization():
 
     # Flatness tolerance (relative deviation)
     # Relaxed so a feasible flat-enough solution is easier to find
-    hourly_tol = 1  # max hourly deviation from baseload (100%)
+    hourly_tol = 0.9  # max hourly deviation from baseload (100%)
 
     # Find column names (case-insensitive)
     cols = {c.lower(): c for c in overall.columns}
@@ -123,38 +123,20 @@ def run_optimization():
 
             # Compute production for this (S, W) using raw profiles
             P = S * solar_raw + W * wind_raw
-            print("Testing S={:.1f} MW, W={:.1f} MW...".format(S, W))
-
             # Find baseload that gives ~10% curtailment
             B = find_baseload(P, target_curtailment=0.10)
 
-            # Hourly relative deviation from baseload
-            dev_hourly = np.abs(P - B) / max(B, 1e-9)
-            max_dev_hourly = float(np.max(dev_hourly))
+            # Hourly shortfall vs baseload (same logic as Prod_vs_PromisedBaseload)
+            # Positive values mean under-production relative to baseload; over-production is not penalized here.
+            hourly_error = (B - P) / B
+            hourly_shortfall = np.maximum(hourly_error, 0.0)
+            max_dev_hourly = float(np.max(hourly_shortfall))
 
-            # Daily-average relative deviation from baseload (diagnostic only)
-            dates = overall[date_col]
-            daily_prod = (
-                pd.Series(P, index=dates)
-                .groupby(dates.dt.floor("D"))
-                .mean()
-                .to_numpy()
-            )
-            if daily_prod.size == 0:
-                max_dev_daily = 0.0
-            else:
-                dev_daily = np.abs(daily_prod - B) / max(B, 1e-9)
-                max_dev_daily = float(np.max(dev_daily))
-
-            # Enforce flatness constraint (hourly only)
-            if max_dev_hourly > hourly_tol:
-                continue
-
-            if B > best_B:
+            if B > best_B and max_dev_hourly <= hourly_tol:
                 print(
                     "New best: B={:.2f} MW (S={:.1f} MW, W={:.1f} MW), "
-                    "max_dev_hourly={:.3f}, max_dev_daily={:.3f}".format(
-                        B, S, W, max_dev_hourly, max_dev_daily
+                    "max_hourly_shortfall={:.3f}".format(
+                        B, S, W, max_dev_hourly
                     )
                 )
                 best_B = B
@@ -185,7 +167,7 @@ def run_optimization():
 
     # Instantaneous error vs promised baseload (fraction of baseload)
     # > 0 means under-producing vs baseload, < 0 means over-producing
-    prod_error = (best_B - P_optimal) / max(best_B, 1e-9)
+    prod_error = (best_B - P_optimal) / best_B
     overall["Prod_vs_PromisedBaseload"] = np.round(prod_error, 4)
 
     # Ensure original averaged wind column has at most 2 decimals
