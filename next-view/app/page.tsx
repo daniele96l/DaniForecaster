@@ -514,6 +514,18 @@ export default function Page() {
     [parsedWind, windScale]
   );
 
+  const scaledTotal = useMemo(() => {
+    const len = Math.min(scaledSolar.length, scaledWind.length);
+    const out: Point[] = [];
+    for (let i = 0; i < len; i++) {
+      out.push({
+        date: scaledSolar[i].date,
+        value: scaledSolar[i].value + scaledWind[i].value
+      });
+    }
+    return out;
+  }, [scaledSolar, scaledWind]);
+
   function computeStats(points: Point[]) {
     if (!points.length) {
       return { min: null, max: null, avg: null, count: 0 };
@@ -946,6 +958,14 @@ export default function Page() {
                 <div>
                   <div style={{ fontSize: 11, color: "#3b82f6", marginBottom: 4 }}>Wind</div>
                   <Stats stats={computeStats(scaledWind)} />
+                </div>
+              )}
+              {scaledTotal.length > 0 && (
+                <div>
+                  <div style={{ fontSize: 11, color: "#eab308", marginBottom: 4 }}>
+                    Solar + Wind
+                  </div>
+                  <Stats stats={computeStats(scaledTotal)} />
                 </div>
               )}
             </div>
