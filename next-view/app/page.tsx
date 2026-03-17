@@ -337,6 +337,11 @@ function WhatIfExplorer({ gridSamples, bestS, bestW, bestB }: { gridSamples: Gri
         <div className="opt-eyebrow">🎛 What-If Explorer</div>
         <div style={{fontSize:13,color:"var(--text-secondary)",marginTop:4}}>
           Adjust solar &amp; wind capacities to explore how the baseload changes across the precomputed grid.
+          Every point shown here already satisfies the yearly curtailment constraint used in the optimization.
+          The optimization solves: pick capacities (S,W) and baseload B that maximize B, subject to
+          (1) yearly curtailment ≈ 10% of total production and (2) average daily production ≥ 70% of B.
+          In this panel the next objective is to minimize the <em>daily error</em> around that baseload, using the
+          trade‑off view and global plot below.
         </div>
       </div>
 
