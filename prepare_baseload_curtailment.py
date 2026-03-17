@@ -67,53 +67,52 @@ def find_baseload(production, target_curtailment=0.10):
 
 
 # ============================================================================
-# MAIN OPTIMIZATION
+# MAIN OPTIMIZATION HELPERS
 # ============================================================================
 
-def run_optimization():
-    """
-    Main optimization routine.
-
-    We grid-search solar/wind capacities (S, W) and:
-    - for each pair, compute the baseload B with ~10% curtailment,
-    - require that average production >= 70% of B,
-    - pick the pair with the highest feasible B,
-    - write all results to Overall_with_baseload.csv.
-    """
-
-    print("Loading input data from Overall.csv ...")
-    overall = pd.read_csv("Overall.csv")
+def load_and_prepare_overall(path: str = "Overall.csv"):
+    """Load Overall.csv, infer key columns, and return raw arrays + metadata."""
+    print(f"Loading input data from {path} ...")
+    overall = pd.read_csv(path)
     print(f"Loaded {len(overall)} rows.")
 
-    # Find column names (case-insensitive)
     cols = {c.lower(): c for c in overall.columns}
     date_col = cols.get("date", overall.columns[0])
     solar_col = cols.get("solar production, kwh", None)
     wind_col = cols.get("wind production, kwh (avg)", None)
 
     if solar_col is None or wind_col is None:
-        print(f"ERROR: Cannot find solar and wind columns")
+        print("ERROR: Cannot find solar and wind columns")
         print(f"Available columns: {list(overall.columns)}")
-        return
+        return None, None, None, None, None, None
 
-    # Parse data and ensure we have a datetime column for daily metrics
     if not pd.api.types.is_datetime64_any_dtype(overall[date_col]):
         overall[date_col] = pd.to_datetime(overall[date_col], errors="coerce")
 
     solar_raw = overall[solar_col].astype(float).to_numpy()
     wind_raw = overall[wind_col].astype(float).to_numpy()
 
-    # Check for obvious data issues before running the optimization
     if np.isnan(solar_raw).any() or np.isnan(wind_raw).any():
         print("ERROR: Data contains NaN values")
-        return
+        return None, None, None, None, None, None
 
     if np.max(solar_raw) <= 0 or np.max(wind_raw) <= 0:
         print("ERROR: No positive values in solar or wind data")
-        return
+        return None, None, None, None, None, None
 
-    # Grid search over capacities (simple 0..200 MW grid)
+    return overall, date_col, solar_col, wind_col, solar_raw, wind_raw
+
+
+def search_best_capacities(
+    solar_raw: np.ndarray,
+    wind_raw: np.ndarray,
+) -> tuple[float, float, float]:
+    """
+    Grid-search (S, W) in [0, 200] MW to find the best baseload B,
+    enforcing the daily-average >= 0.7 * B constraint.
+    """
     print("Starting capacity grid search over S,W in [0,200] MW (step 5 MW) ...")
+
     S_values = np.linspace(0, 200, 41)
     W_values = np.linspace(0, 200, 41)
 
@@ -121,24 +120,15 @@ def run_optimization():
     best_S = 0.0
     best_W = 0.0
 
-    # Loop over all (S, W) pairs and keep the one with the
-    # highest feasible baseload B given our constraints.
-    for i, S in enumerate(S_values):
-        for j, W in enumerate(W_values):
-            # Skip if no capacity
+    for S in S_values:
+        for W in W_values:
             if S == 0 and W == 0:
                 continue
 
-            # Compute production for this (S, W) using raw profiles
             P = S * solar_raw + W * wind_raw
-            # For this production profile, find baseload B that implies
-            # approximately 10% curtailment over the whole period.
             B = find_baseload(P, target_curtailment=0.10)
 
-            # Daily mean production constraint:
-            # keep only solutions where average production over the whole
-            # period is at least 70% of the baseload B.
-            daily_avg_production = np.mean(P)
+            daily_avg_production = float(np.mean(P))
             if B > best_B and daily_avg_production >= 0.7 * B:
                 print(
                     "New best candidate -> "
@@ -151,28 +141,36 @@ def run_optimization():
                 best_S = S
                 best_W = W
 
-
     if best_B <= 0:
         print("ERROR: Could not find valid solution")
-        return
+        return 0.0, 0.0, 0.0
 
     print(
         "Final choice -> "
-        "B={:.2f} MW, S={:.1f} MW, W={:.1f} MW".format(
-            best_B, best_S, best_W
-        )
+        "B={:.2f} MW, S={:.1f} MW, W={:.1f} MW".format(best_B, best_S, best_W)
     )
+    return best_B, best_S, best_W
 
-    # Compute final production with best capacities on raw profiles
+
+def build_output_dataframe(
+    overall: pd.DataFrame,
+    date_col: str,
+    solar_col: str,
+    wind_col: str,
+    solar_raw: np.ndarray,
+    wind_raw: np.ndarray,
+    best_B: float,
+    best_S: float,
+    best_W: float,
+) -> pd.DataFrame:
+    """Attach all derived metrics/columns and write CSV."""
     P_optimal = best_S * solar_raw + best_W * wind_raw
 
-    # Per-hour curtailment relative to baseload
     curtailment = np.maximum(P_optimal - best_B, 0.0)
     curtailment_ratio = np.zeros_like(P_optimal, dtype=float)
     mask = P_optimal > 0
     curtailment_ratio[mask] = curtailment[mask] / P_optimal[mask]
 
-    # Add to dataframe (rounded) with short, readable names
     overall["SolarCap_MW"] = np.round(best_S, 2)
     overall["WindCap_MW"] = np.round(best_W, 2)
     overall["Baseload_MW"] = np.round(best_B, 2)
@@ -186,23 +184,17 @@ def run_optimization():
     prod_error = (best_B - P_optimal) / best_B
     overall["HourlyShortfall"] = np.round(prod_error, 4)
 
-    # Daily-average production and 70% baseload metric per row
     day_index = overall[date_col].dt.floor("D")
     overall["DailyAvgProd"] = (
         overall.groupby(day_index)["ProdCombined"].transform("mean")
     ).round(2)
-    # Daily error vs baseload as a fraction:
-    #   0.10 -> day is 10% below baseload
-    #  -0.05 -> day is 5% above baseload
     overall["DailyErrorPct"] = np.round(
         (overall["DailyAvgProd"] - overall["Baseload_MW"]) / overall["Baseload_MW"],
         4,
     )
 
-    # Ensure original averaged wind column has at most 2 decimals
     overall[wind_col] = np.round(overall[wind_col].astype(float), 2)
 
-    # Order columns for output
     preferred_cols = [
         date_col,
         solar_col,
@@ -223,10 +215,46 @@ def run_optimization():
         c for c in overall.columns if c not in preferred_cols
     ]
 
-    # Save formatted dataset
     print("Writing results to Overall_with_baseload.csv ...")
     overall.to_csv("Overall_with_baseload.csv", index=False, columns=ordered_cols)
     print("Done.")
+
+    return overall
+
+
+def run_optimization():
+    """High-level orchestration for the baseload optimization."""
+    (
+        overall,
+        date_col,
+        solar_col,
+        wind_col,
+        solar_raw,
+        wind_raw,
+    ) = load_and_prepare_overall("Overall.csv")
+
+    if overall is None:
+        return
+
+    best_B, best_S, best_W = search_best_capacities(
+        solar_raw=solar_raw,
+        wind_raw=wind_raw,
+    )
+
+    if best_B <= 0:
+        return
+
+    build_output_dataframe(
+        overall=overall,
+        date_col=date_col,
+        solar_col=solar_col,
+        wind_col=wind_col,
+        solar_raw=solar_raw,
+        wind_raw=wind_raw,
+        best_B=best_B,
+        best_S=best_S,
+        best_W=best_W,
+    )
 
 
 # ============================================================================
