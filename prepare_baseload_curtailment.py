@@ -51,15 +51,9 @@ def find_baseload(production, target_curtailment=0.10):
     hi = float(np.max(production))
 
     # Binary search for B where curtailment ≈ target
-    for it in range(100):
+    for _ in range(100):
         mid = 0.5 * (lo + hi)
         ratio = compute_curtailment_ratio(production, mid)
-
-        # Minimal binary-search log for debugging
-        print(
-            f"[binsearch] iter={it:02d} lo={lo:.4f} hi={hi:.4f} "
-            f"mid={mid:.4f} curt={ratio*100:.3f}%"
-        )
 
         if ratio > target_curtailment:
             lo = mid  # curtailment too high, raise B
@@ -128,9 +122,8 @@ def run_optimization():
 
             # Find baseload that gives ~10% curtailment
             B = find_baseload(P, target_curtailment=0.10)
-            # Keep track of best
-            print("Baseload search: S={:.1f} MW, W={:.1f} MW => B={:.2f} MW".format(S, W, B))
             if B > best_B:
+                print("New best found: B={:.2f} MW (S={:.1f} MW, W={:.1f} MW)".format(B, S, W))
                 best_B = B
                 best_S = S
                 best_W = W
