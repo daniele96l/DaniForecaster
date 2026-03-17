@@ -103,8 +103,8 @@ def run_optimization():
         return
 
     # Grid search over capacities (simple 0..200 MW grid)
-    S_values = np.linspace(0, 20000, 41)
-    W_values = np.linspace(0, 20000, 41)
+    S_values = np.linspace(0, 200, 41)
+    W_values = np.linspace(0, 200, 41)
 
     best_B = -np.inf
     best_S = 0.0
@@ -139,6 +139,7 @@ def run_optimization():
     # Add to dataframe (rounded to 2 decimal places)
     overall["SolarScalingFactor"] = np.round(best_S, 2)
     overall["WindScalingFactor"] = np.round(best_W, 2)
+    overall["PromisedBaseload"] = np.round(best_B, 2)
     overall["SolarScaled"] = np.round(best_S * solar_raw, 2)
     overall["WindScaled"] = np.round(best_W * wind_raw, 2)
     overall["ProductionCombined"] = np.round(P_optimal, 2)
