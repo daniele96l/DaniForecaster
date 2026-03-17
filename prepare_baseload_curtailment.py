@@ -103,8 +103,8 @@ def run_optimization():
         return
 
     # Grid search over capacities (simple 0..200 MW grid)
-    S_values = np.linspace(0, 200, 41)
-    W_values = np.linspace(0, 200, 41)
+    S_values = np.linspace(0, 20000, 41)
+    W_values = np.linspace(0, 20000, 41)
 
     best_B = -np.inf
     best_S = 0.0
