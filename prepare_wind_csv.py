@@ -22,6 +22,11 @@ def main() -> None:
         df_melted["Hour"] - 1, unit="h"
     )
 
+    # Save original non-averaged time series (with year)
+    df_raw = df_melted[["Date", "Production, KWh"]].dropna().sort_values("Date")
+    df_raw["Date"] = df_raw["Date"].dt.strftime("%d/%m/%Y %H:%M")
+    df_raw.to_csv("Wind_raw.csv", index=False)
+
     # Drop NaNs before aggregating
     df_melted = df_melted.dropna(subset=["Production, KWh"])
 

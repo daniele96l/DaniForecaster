@@ -70,24 +70,52 @@ function parseWindCsv(text: string): Point[] {
   return out;
 }
 
+function parseWindRawCsv(text: string): Point[] {
+  const lines = text.split(/\r?\n/);
+  const dataLines = lines.slice(1);
+  const out: Point[] = [];
+  for (const raw of dataLines) {
+    const line = raw.trim();
+    if (!line) continue;
+    const [dateStrRaw, valueStr] = line.split(",");
+    const dateStr = dateStrRaw?.replace(/"/g, "");
+    const date = parseDateTime(dateStr);
+    const value = parseFloat(valueStr);
+    if (!date || !Number.isFinite(value)) continue;
+    out.push({ date: date.toISOString(), value });
+  }
+  return out;
+}
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const dataset = searchParams.get("dataset") === "wind" ? "wind" : "solar";
+  const requested = searchParams.get("dataset");
+  const dataset: "solar" | "wind" | "wind_raw" =
+    requested === "wind" || requested === "wind_raw" ? requested : "solar";
   const yearParam = searchParams.get("year");
   const year = yearParam ? Number(yearParam) : undefined;
 
   try {
     const root = process.cwd();
-    const csvPath =
-      dataset === "solar"
-        ? path.join(root, "..", "Solar.CSV")
-        : path.join(root, "..", "Wind.csv");
-    const text = await fs.readFile(csvPath, "utf8");
-    const allPoints =
-      dataset === "solar" ? parseSolarCsv(text) : parseWindCsv(text);
+    let csvPath: string;
+    let allPoints: Point[];
+
+    if (dataset === "solar") {
+      csvPath = path.join(root, "..", "Solar.CSV");
+      const text = await fs.readFile(csvPath, "utf8");
+      allPoints = parseSolarCsv(text);
+    } else if (dataset === "wind") {
+      csvPath = path.join(root, "..", "Wind.csv");
+      const text = await fs.readFile(csvPath, "utf8");
+      allPoints = parseWindCsv(text);
+    } else {
+      csvPath = path.join(root, "..", "Wind_raw.csv");
+      const text = await fs.readFile(csvPath, "utf8");
+      allPoints = parseWindRawCsv(text);
+    }
 
     const filtered =
-      year != null && Number.isFinite(year)
+      dataset === "wind_raw" && year != null && Number.isFinite(year)
         ? allPoints.filter(
             (p) => new Date(p.date).getFullYear() === Number(year)
           )
@@ -99,9 +127,12 @@ export async function GET(request: Request) {
     const sum = values.reduce((a, b) => a + b, 0);
     const avg = values.length ? sum / values.length : null;
 
-    const years = Array.from(
-      new Set(allPoints.map((p) => new Date(p.date).getFullYear()))
-    ).sort((a, b) => a - b);
+    const years =
+      dataset === "wind_raw"
+        ? Array.from(
+            new Set(allPoints.map((p) => new Date(p.date).getFullYear()))
+          ).sort((a, b) => a - b)
+        : [];
 
     return NextResponse.json({
       dataset,

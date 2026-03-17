@@ -2,12 +2,12 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 
-type Dataset = "solar" | "wind" | "both";
+type Dataset = "solar" | "wind" | "wind_raw" | "both";
 
 type Point = { date: string; value: number };
 
 type ApiResponse = {
-  dataset: "solar" | "wind";
+  dataset: "solar" | "wind" | "wind_raw";
   year: number | null;
   years: number[];
   points: Point[];
@@ -15,7 +15,7 @@ type ApiResponse = {
   error?: string;
 };
 
-function useTimeSeries(dataset: "solar" | "wind") {
+function useTimeSeries(dataset: "solar" | "wind" | "wind_raw", year: number | null) {
   const [data, setData] = useState<ApiResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -27,6 +27,9 @@ function useTimeSeries(dataset: "solar" | "wind") {
         setLoading(true);
         setError(null);
         const params = new URLSearchParams({ dataset });
+        if (dataset === "wind_raw" && year != null) {
+          params.set("year", String(year));
+        }
         const res = await fetch(`/api/data?${params.toString()}`);
         const json = (await res.json()) as ApiResponse;
         if (!res.ok || json.error) {
@@ -43,7 +46,7 @@ function useTimeSeries(dataset: "solar" | "wind") {
     return () => {
       cancelled = true;
     };
-  }, [dataset]);
+  }, [dataset, year]);
 
   return { data, loading, error };
 }
@@ -421,11 +424,13 @@ function DataTable({ points, label }: { points: Point[]; label?: string }) {
 
 function filterPoints(
   points: Point[],
-  opts: { dataset: Dataset; year: number | null; month: number | null; day: number | null; isWind: boolean }
+  opts: { dataset: Dataset; year: number | null; month: number | null; day: number | null; kind: "solar" | "wind" | "wind_raw" }
 ): Point[] {
   return points.filter((p) => {
     const d = new Date(p.date);
-    if (opts.isWind && opts.year != null && d.getFullYear() !== opts.year) return false;
+    if (opts.kind === "wind_raw" && opts.year != null && d.getFullYear() !== opts.year) {
+      return false;
+    }
     if (opts.month != null && d.getMonth() + 1 !== opts.month) return false;
     if (opts.day != null && d.getDate() !== opts.day) return false;
     return true;
@@ -434,44 +439,68 @@ function filterPoints(
 
 export default function Page() {
   const [dataset, setDataset] = useState<Dataset>("solar");
+  const [year, setYear] = useState<number | null>(null);
   const [month, setMonth] = useState<number | null>(null);
   const [day, setDay] = useState<number | null>(null);
    const [solarScale, setSolarScale] = useState<number>(1);
    const [windScale, setWindScale] = useState<number>(1);
 
-  const solarRes = useTimeSeries("solar");
-  const windRes = useTimeSeries("wind");
+  const solarRes = useTimeSeries("solar", null);
+  const windRes = useTimeSeries("wind", null);
+  const windRawRes = useTimeSeries("wind_raw", year);
 
   const solarData = solarRes.data;
   const windData = windRes.data;
-  const data = dataset === "solar" ? solarData : dataset === "wind" ? windData : null;
+  const windRawData = windRawRes.data;
+  const data =
+    dataset === "solar"
+      ? solarData
+      : dataset === "wind"
+        ? windData
+        : dataset === "wind_raw"
+          ? windRawData
+          : null;
   const loading =
     dataset === "both"
       ? solarRes.loading || windRes.loading
       : dataset === "solar"
         ? solarRes.loading
-        : windRes.loading;
-  const error = dataset === "both" ? solarRes.error || windRes.error : dataset === "solar" ? solarRes.error : windRes.error;
+        : dataset === "wind"
+          ? windRes.loading
+          : windRawRes.loading;
+  const error =
+    dataset === "both"
+      ? solarRes.error || windRes.error
+      : dataset === "solar"
+        ? solarRes.error
+        : dataset === "wind"
+          ? windRes.error
+          : windRawRes.error;
 
   const parsedSolar = useMemo(
     () =>
       filterPoints(solarData?.points ?? [], {
         dataset,
+        year,
         month,
         day,
-        isWind: false
+        kind: "solar"
       }),
-    [solarData, dataset, month, day]
+    [solarData, dataset, year, month, day]
   );
   const parsedWind = useMemo(
     () =>
-      filterPoints(windData?.points ?? [], {
+      filterPoints(
+        (dataset === "wind_raw" ? windRawData?.points : windData?.points) ?? [],
+        {
         dataset,
+        year,
         month,
         day,
-        isWind: true
-      }),
-    [windData, dataset, month, day]
+        kind: dataset === "wind_raw" ? "wind_raw" : "wind"
+        }
+      ),
+    [windData, windRawData, dataset, year, month, day]
   );
 
   const scaledSolar = useMemo(
@@ -500,12 +529,15 @@ export default function Page() {
     for (const p of solarData?.points ?? []) {
       set.add(new Date(p.date).getMonth() + 1);
     }
-    for (const p of windData?.points ?? []) {
+    const windSource =
+      dataset === "wind_raw" ? windRawData?.points ?? [] : windData?.points ?? [];
+    for (const p of windSource) {
       const d = new Date(p.date);
+      if (dataset === "wind_raw" && year != null && d.getFullYear() !== year) continue;
       set.add(d.getMonth() + 1);
     }
     return Array.from(set).sort((a, b) => a - b);
-  }, [solarData, windData]);
+  }, [solarData, windData, windRawData, dataset, year]);
 
   const dayOptions = useMemo(() => {
     const set = new Set<number>();
@@ -514,13 +546,16 @@ export default function Page() {
       if (month != null && d.getMonth() + 1 !== month) continue;
       set.add(d.getDate());
     }
-    for (const p of windData?.points ?? []) {
+    const windSource =
+      dataset === "wind_raw" ? windRawData?.points ?? [] : windData?.points ?? [];
+    for (const p of windSource) {
       const d = new Date(p.date);
+      if (dataset === "wind_raw" && year != null && d.getFullYear() !== year) continue;
       if (month != null && d.getMonth() + 1 !== month) continue;
       set.add(d.getDate());
     }
     return Array.from(set).sort((a, b) => a - b);
-  }, [solarData, windData, month]);
+  }, [solarData, windData, windRawData, dataset, year, month]);
 
   useEffect(() => {
     if (month != null && !monthOptions.includes(month)) setMonth(null);
@@ -620,10 +655,44 @@ export default function Page() {
                   }}
                 >
                   <option value="solar">Solar (hourly)</option>
-                  <option value="wind">Wind (hourly)</option>
-                  <option value="both">Both (overlay)</option>
+                  <option value="wind">Wind (typical yearless)</option>
+                  <option value="wind_raw">Wind raw (with years)</option>
+                  <option value="both">Solar + Wind overlay</option>
                 </select>
               </label>
+              {dataset === "wind_raw" && (
+                <label
+                  style={{
+                    fontSize: 12,
+                    textTransform: "uppercase",
+                    letterSpacing: 0.08,
+                    color: "#9ca3af"
+                  }}
+                >
+                  Year
+                  <select
+                    value={year ?? ""}
+                    onChange={(e) =>
+                      setYear(e.target.value ? Number(e.target.value) : null)
+                    }
+                    style={{
+                      marginLeft: 8,
+                      padding: "6px 10px",
+                      borderRadius: 999,
+                      border: "1px solid rgba(148,163,184,0.6)",
+                      background: "#020617",
+                      color: "#e5e7eb",
+                      fontSize: 13
+                    }}
+                  >
+                    {(windRawData?.years ?? []).map((y) => (
+                      <option key={y} value={y}>
+                        {y}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               <label
                 style={{
                   fontSize: 12,
@@ -764,7 +833,9 @@ export default function Page() {
               Showing{" "}
               {dataset === "both"
                 ? `${parsedSolar.length.toLocaleString()} solar + ${parsedWind.length.toLocaleString()} wind`
-                : `${(dataset === "solar" ? parsedSolar : parsedWind).length.toLocaleString()} points`}
+                : `${
+                    (dataset === "solar" ? parsedSolar : parsedWind).length.toLocaleString()
+                  } points`}
             </div>
           </div>
 
@@ -807,16 +878,20 @@ export default function Page() {
           ) : (
             <Chart
               series={{
-                solar: dataset === "solar" || dataset === "both" ? scaledSolar : undefined,
-                wind: dataset === "wind" || dataset === "both" ? scaledWind : undefined
+                solar:
+                  dataset === "solar" || dataset === "both" ? scaledSolar : undefined,
+                wind:
+                  dataset === "wind" ||
+                  dataset === "wind_raw" ||
+                  dataset === "both"
+                    ? scaledWind
+                    : undefined
               }}
             />
           )}
 
-          {dataset === "solar" && (
-            <Stats stats={computeStats(scaledSolar)} />
-          )}
-          {dataset === "wind" && (
+          {dataset === "solar" && <Stats stats={computeStats(scaledSolar)} />}
+          {(dataset === "wind" || dataset === "wind_raw") && (
             <Stats stats={computeStats(scaledWind)} />
           )}
           {dataset === "both" && (
@@ -839,7 +914,11 @@ export default function Page() {
 
         <section style={{ flex: 2 }}>
           <DataTable
-            points={dataset === "wind" ? scaledWind : scaledSolar}
+            points={
+              dataset === "wind" || dataset === "wind_raw"
+                ? scaledWind
+                : scaledSolar
+            }
             label={
               dataset === "both"
                 ? "Solar (scaled sample)"
