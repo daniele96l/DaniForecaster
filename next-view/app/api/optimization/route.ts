@@ -21,6 +21,8 @@ type SeriesPoint = {
   baseload: number;
   curtailment: number;
   curtailmentRatio: number;
+  hourlyShortfall: number;
+  dailyAvgProd: number;
 };
 
 type OptimizationResult = {
@@ -182,7 +184,12 @@ export async function POST(request: Request) {
           P[i] = S * solar[i] + W * wind[i];
         }
         const B = findBaseload(P, targetCurtailment);
-        if (B > bestB) {
+        // Daily mean production constraint: daily_avg_production >= 0.7 * B
+        let sumP = 0;
+        for (let i = 0; i < P.length; i++) sumP += P[i];
+        const dailyAvgProduction = sumP / P.length;
+
+        if (B > bestB && dailyAvgProduction >= 0.7 * B) {
           bestB = B;
           bestS = S;
           bestW = W;
@@ -199,6 +206,16 @@ export async function POST(request: Request) {
     }
 
     const series: SeriesPoint[] = [];
+    const daySums = new Map<string, { sum: number; count: number }>();
+
+    // First pass: compute scaled production and per-day aggregates
+    const solarScaledArr: number[] = [];
+    const windScaledArr: number[] = [];
+    const prodArr: number[] = [];
+    const curtArr: number[] = [];
+    const ratioArr: number[] = [];
+    const shortfallArr: number[] = [];
+
     for (let i = 0; i < solar.length; i++) {
       const solarScaled = bestS * solar[i];
       const windScaled = bestW * wind[i];
@@ -207,15 +224,40 @@ export async function POST(request: Request) {
       const curtailment = Math.max(productionCombined - baseload, 0);
       const ratio =
         productionCombined > 0 ? curtailment / productionCombined : 0;
+      const hourlyShortfall =
+        baseload > 0 ? (baseload - productionCombined) / baseload : 0;
+
+      solarScaledArr[i] = solarScaled;
+      windScaledArr[i] = windScaled;
+      prodArr[i] = productionCombined;
+      curtArr[i] = curtailment;
+      ratioArr[i] = ratio;
+      shortfallArr[i] = hourlyShortfall;
+
+      const dayKey = dates[i].toISOString().slice(0, 10);
+      const agg = daySums.get(dayKey) ?? { sum: 0, count: 0 };
+      agg.sum += productionCombined;
+      agg.count += 1;
+      daySums.set(dayKey, agg);
+    }
+
+    // Second pass: build series with DailyAvgProd
+    for (let i = 0; i < solar.length; i++) {
+      const baseload = bestB;
+      const dayKey = dates[i].toISOString().slice(0, 10);
+      const agg = daySums.get(dayKey)!;
+      const dailyAvgProd = agg.sum / agg.count;
 
       series.push({
         date: dates[i].toISOString(),
-        solarScaled: Number(solarScaled.toFixed(2)),
-        windScaled: Number(windScaled.toFixed(2)),
-        productionCombined: Number(productionCombined.toFixed(2)),
+        solarScaled: Number(solarScaledArr[i].toFixed(2)),
+        windScaled: Number(windScaledArr[i].toFixed(2)),
+        productionCombined: Number(prodArr[i].toFixed(2)),
         baseload: Number(baseload.toFixed(2)),
-        curtailment: Number(curtailment.toFixed(2)),
-        curtailmentRatio: Number(ratio.toFixed(4))
+        curtailment: Number(curtArr[i].toFixed(2)),
+        curtailmentRatio: Number(ratioArr[i].toFixed(4)),
+        hourlyShortfall: Number(shortfallArr[i].toFixed(4)),
+        dailyAvgProd: Number(dailyAvgProd.toFixed(2))
       });
     }
 

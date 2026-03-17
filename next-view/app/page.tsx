@@ -56,9 +56,11 @@ function useTimeSeries(dataset: "solar" | "wind" | "wind_raw", year: number | nu
 type SeriesEntry = { date: Date; value: number };
 
 function Chart({
-  series
+  series,
+  labels
 }: {
   series: { solar?: Point[]; wind?: Point[] };
+  labels?: { solar?: string; wind?: string };
 }) {
   const [hover, setHover] = useState<{
     key: "solar" | "wind";
@@ -207,10 +209,14 @@ function Chart({
       {(series.solar?.length || series.wind?.length) && (
         <div style={{ display: "flex", gap: 16, marginBottom: 8, fontSize: 12 }}>
           {series.solar?.length ? (
-            <span style={{ color: "#22c55e" }}>● Solar</span>
+            <span style={{ color: "#22c55e" }}>
+              ● {labels?.solar ?? "Solar"}
+            </span>
           ) : null}
           {series.wind?.length ? (
-            <span style={{ color: "#3b82f6" }}>● Wind</span>
+            <span style={{ color: "#3b82f6" }}>
+              ● {labels?.wind ?? "Wind"}
+            </span>
           ) : null}
         </div>
       )}
@@ -1247,20 +1253,93 @@ function OptimizationPanel() {
         )}
 
         {focusedSeries && focusedSeries.length > 0 && (
-          <div style={{ marginTop: 8 }}>
-            <Chart
-              series={{
-                solar: focusedSeries.map((p) => ({
-                  date: p.date,
-                  value: p.productionCombined
-                })),
-                wind: focusedSeries.map((p) => ({
-                  date: p.date,
-                  value: p.baseload
-                }))
+          <>
+            <div style={{ marginTop: 8 }}>
+              <div
+                style={{
+                  fontSize: 11,
+                  textTransform: "uppercase",
+                  letterSpacing: 0.08,
+                  color: "#9ca3af",
+                  marginBottom: 4
+                }}
+              >
+                Production vs baseload (focused interval)
+              </div>
+              <Chart
+                series={{
+                  solar: focusedSeries.map((p) => ({
+                    date: p.date,
+                    value: p.productionCombined
+                  })),
+                  wind: focusedSeries.map((p) => ({
+                    date: p.date,
+                    value: p.baseload
+                  }))
+                }}
+                labels={{ solar: "Prod combined", wind: "Baseload" }}
+              />
+            </div>
+
+            <div
+              style={{
+                marginTop: 12,
+                display: "grid",
+                gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+                gap: 12
               }}
-            />
-          </div>
+            >
+              <div>
+                <div
+                  style={{
+                    fontSize: 11,
+                    textTransform: "uppercase",
+                    letterSpacing: 0.08,
+                    color: "#9ca3af",
+                    marginBottom: 4
+                  }}
+                >
+                  Curtailment (MW)
+                </div>
+                <Chart
+                  series={{
+                    solar: focusedSeries.map((p) => ({
+                      date: p.date,
+                      value: p.curtailment
+                    }))
+                  }}
+                  labels={{ solar: "Curtailment" }}
+                />
+              </div>
+              <div>
+                <div
+                  style={{
+                    fontSize: 11,
+                    textTransform: "uppercase",
+                    letterSpacing: 0.08,
+                    color: "#9ca3af",
+                    marginBottom: 4
+                  }}
+                >
+                  Shortfall vs baseload (fraction)
+                </div>
+                <Chart
+                  series={{
+                    solar: focusedSeries.map((p) => {
+                      const diff = p.baseload - p.productionCombined;
+                      const frac =
+                        p.baseload > 0 ? diff / p.baseload : 0;
+                      return {
+                        date: p.date,
+                        value: frac
+                      };
+                    })
+                  }}
+                  labels={{ solar: "Shortfall" }}
+                />
+              </div>
+            </div>
+          </>
         )}
       </div>
 
