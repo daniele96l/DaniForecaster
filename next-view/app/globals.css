@@ -1,5 +1,42 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
 
+/* ── Dual-zone chart glow ─────────────────────────────────────── */
+.dual-zone-curt { filter: drop-shadow(0 0 6px rgba(251,146,60,.5)); }
+.dual-zone-shrt { filter: drop-shadow(0 0 6px rgba(248,113,113,.5)); }
+
+/* ── Typed slider thumbs ──────────────────────────────────────── */
+.slider-solar::-webkit-slider-thumb {
+  background: linear-gradient(135deg, #22d3a5, #10b981);
+  box-shadow: 0 0 8px rgba(34,211,165,.55);
+}
+.slider-wind::-webkit-slider-thumb {
+  background: linear-gradient(135deg, #60a5fa, #3b82f6);
+  box-shadow: 0 0 8px rgba(96,165,250,.55);
+}
+
+/* ── What-if card ─────────────────────────────────────────────── */
+.whatif-result {
+  transition: border-color var(--t), transform var(--t), box-shadow var(--t);
+}
+.whatif-result:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 24px rgba(0,0,0,.4);
+}
+
+/* ── Annotation pill ─────────────────────────────────────────── */
+.zone-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.zone-curt { background: rgba(251,146,60,.12); border: 1px solid rgba(251,146,60,.35); color: #fb923c; }
+.zone-shrt { background: rgba(248,113,113,.12); border: 1px solid rgba(248,113,113,.35); color: #f87171; }
+
 *, *::before, *::after {
   box-sizing: border-box;
 }
