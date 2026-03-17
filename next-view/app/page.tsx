@@ -57,10 +57,14 @@ type SeriesEntry = { date: Date; value: number };
 
 function Chart({
   series,
-  labels
+  labels,
+  tooltipLabels,
+  unit
 }: {
   series: { solar?: Point[]; wind?: Point[] };
   labels?: { solar?: string; wind?: string };
+  tooltipLabels?: { solar?: string; wind?: string };
+  unit?: string;
 }) {
   const [hover, setHover] = useState<{
     key: "solar" | "wind";
@@ -228,10 +232,10 @@ function Chart({
           width: "100%",
           maxWidth: width,
           borderRadius: 16,
-          border: "1px solid rgba(148,163,184,0.4)",
+          border: "1px solid rgba(51,65,85,0.9)",
           background:
-            "radial-gradient(circle at top left, rgba(59,130,246,0.25), #020617 60%)",
-          boxShadow: "0 18px 45px rgba(15,23,42,0.9)"
+            "radial-gradient(circle at top left, rgba(30,64,175,0.45), #020617 65%)",
+          boxShadow: "0 18px 40px rgba(15,23,42,0.85)"
         }}
       >
         <defs>
@@ -296,20 +300,32 @@ function Chart({
           const count = hover.key === "solar" ? solarParsed.length : windParsed.length;
           const cx = xScale(hover.index, count);
           const cy = yScale(hovered.value);
-          const tooltipW = 190;
-          const tooltipH = 52;
+          const tooltipW = 210;
+          const tooltipH = 56;
           const tx = Math.min(Math.max(cx + 10, padding), width - padding - tooltipW);
           const ty = Math.max(cy - tooltipH - 10, padding);
+          const label =
+            hover.key === "solar"
+              ? tooltipLabels?.solar ?? labels?.solar ?? "Solar"
+              : tooltipLabels?.wind ?? labels?.wind ?? "Wind";
+          const valueUnit = unit === undefined ? "kWh" : unit;
           return (
             <>
               <line x1={cx} x2={cx} y1={padding} y2={height - padding} stroke="rgba(248,250,252,0.35)" strokeDasharray="4 4" />
               <circle cx={cx} cy={cy} r={4} fill={hover.key === "solar" ? "#22c55e" : "#3b82f6"} stroke="#fefce8" strokeWidth={1.4} />
               <rect x={tx} y={ty} width={tooltipW} height={tooltipH} rx={8} ry={8} fill="rgba(15,23,42,0.96)" stroke="rgba(148,163,184,0.9)" strokeWidth={1} />
               <text x={tx + 10} y={ty + 18} fill="#e5e7eb" fontSize={11}>
-                {hovered.date.toLocaleString(undefined, { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                {hovered.date.toLocaleString(undefined, {
+                  year: "numeric",
+                  month: "2-digit",
+                  day: "2-digit",
+                  hour: "2-digit",
+                  minute: "2-digit"
+                })}
               </text>
               <text x={tx + 10} y={ty + 34} fill={hover.key === "solar" ? "#22c55e" : "#3b82f6"} fontSize={12}>
-                {hover.key === "solar" ? "Solar" : "Wind"}: {hovered.value.toFixed(3)} kWh
+                {label}: {hovered.value.toFixed(3)}
+                {valueUnit ? ` ${valueUnit}` : ""}
               </text>
             </>
           );
@@ -1000,7 +1016,19 @@ export default function Page() {
           </section>
         )}
 
-        {view === "optimization" && <OptimizationPanel />}
+        {view === "optimization" && (
+          <section
+            style={{
+              flex: 1,
+              display: "flex",
+              justifyContent: "center"
+            }}
+          >
+            <div style={{ width: "100%", maxWidth: 1200 }}>
+              <OptimizationPanel />
+            </div>
+          </section>
+        )}
       </main>
     </div>
   );
@@ -1134,14 +1162,19 @@ function OptimizationPanel() {
             </div>
             <div style={{ fontSize: 13, maxWidth: 620, lineHeight: 1.4 }}>
               <strong>Question:</strong> Grid search over capacities to maximize baseload at ~10%
-              curtailment.
+              yearly curtailment.
+              <br />
+              <strong>Assumptions:</strong> the 10% curtailment constraint is enforced on the whole
+              year. If we only used this constraint, the algorithm would happily choose very
+              peaky solar (high production in the afternoon) and low or no wind, which maximizes
+              annual energy but can leave people without power in the morning or at night.
               <br />
               <strong>Why this solves it:</strong> we scan a grid of solar (S) and wind (W)
               capacities, compute the resulting hourly production, and for each pair find the
-              baseload B that gives about 10% curtailment (energy above B). We only accept
-              combinations where the average production is at least 70% of B, and among those
-              we pick the one with the highest baseload, so the final choice is the largest
-              stable baseload that still respects both the curtailment and adequacy constraints.
+              baseload B that gives about 10% yearly curtailment. We then require that the average
+              daily production is at least 70% of B, so we only keep solutions that can support a
+              reasonable fraction of the promised baseload across the full day, and among those
+              we pick the one with the highest baseload.
             </div>
           </div>
           <button
@@ -1362,7 +1395,7 @@ function OptimizationPanel() {
         {intervalStats && (
           <div
             style={{
-              marginTop: 8,
+              marginTop: 10,
               display: "grid",
               gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
               gap: 12
@@ -1387,9 +1420,9 @@ function OptimizationPanel() {
                 style={{
                   padding: "10px 12px",
                   borderRadius: 12,
-                  border: "1px solid rgba(148,163,184,0.4)",
+                  border: "1px solid rgba(148,163,184,0.45)",
                   background:
-                    "linear-gradient(135deg, rgba(15,23,42,0.9), rgba(96,165,250,0.3))",
+                    "linear-gradient(135deg, rgba(15,23,42,0.95), rgba(56,189,248,0.28))",
                   fontSize: 12,
                   color: "#e5e7eb"
                 }}
@@ -1400,7 +1433,7 @@ function OptimizationPanel() {
                     textTransform: "uppercase",
                     letterSpacing: 0.08,
                     color: "#9ca3af",
-                    marginBottom: 4
+                    marginBottom: 2
                   }}
                 >
                   {item.label}
@@ -1480,7 +1513,7 @@ function OptimizationPanel() {
               </div>
               <div
                 style={{
-                  padding: "10px 14px",
+                  padding: "6px 14px 10px",
                   overflow: "auto",
                   fontSize: 11
                 }}
@@ -1504,9 +1537,13 @@ function OptimizationPanel() {
                         <th
                           key={h}
                           style={{
+                            position: "sticky",
+                            top: 0,
+                            zIndex: 1,
                             textAlign: "right",
                             padding: "6px 8px",
-                            borderBottom: "1px solid rgba(148,163,184,0.5)",
+                            borderBottom: "1px solid rgba(148,163,184,0.6)",
+                            backgroundColor: "rgba(15,23,42,0.98)",
                             color: "#9ca3af",
                             fontWeight: 500,
                             whiteSpace: "nowrap"
@@ -1584,6 +1621,7 @@ function OptimizationPanel() {
                   }))
                 }}
                 labels={{ solar: "Combined production", wind: "Baseload" }}
+                unit="MW"
               />
             </div>
 
@@ -1614,7 +1652,8 @@ function OptimizationPanel() {
                       value: p.curtailment
                     }))
                   }}
-                labels={{ solar: "Curtailment above baseload" }}
+                  labels={{ solar: "Curtailment above baseload" }}
+                  unit="MW"
                 />
               </div>
               <div>
@@ -1642,6 +1681,7 @@ function OptimizationPanel() {
                     })
                   }}
                   labels={{ solar: "Shortfall vs baseload" }}
+                  unit=""
                 />
               </div>
             </div>
