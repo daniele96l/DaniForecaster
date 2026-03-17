@@ -2,12 +2,12 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 
-type Dataset = "solar" | "wind";
+type Dataset = "solar" | "wind" | "both";
 
 type Point = { date: string; value: number };
 
 type ApiResponse = {
-  dataset: Dataset;
+  dataset: "solar" | "wind";
   year: number | null;
   years: number[];
   points: Point[];
@@ -15,7 +15,7 @@ type ApiResponse = {
   error?: string;
 };
 
-function useTimeSeries(dataset: Dataset, year: number | null) {
+function useTimeSeries(dataset: "solar" | "wind", year: number | null) {
   const [data, setData] = useState<ApiResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -51,23 +51,68 @@ function useTimeSeries(dataset: Dataset, year: number | null) {
   return { data, loading, error };
 }
 
-function Chart({ points }: { points: Point[] }) {
-  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
 
-  const parsed = useMemo(
+type SeriesEntry = { date: Date; value: number };
+
+function Chart({
+  series
+}: {
+  series: { solar?: Point[]; wind?: Point[] };
+}) {
+  const [hover, setHover] = useState<{
+    key: "solar" | "wind";
+    index: number;
+  } | null>(null);
+
+  const solarParsed = useMemo(
     () =>
-      points.map((p) => ({
+      (series.solar ?? []).map((p) => ({
         date: new Date(p.date),
         value: p.value
       })),
-    [points]
+    [series.solar]
+  );
+  const windParsed = useMemo(
+    () =>
+      (series.wind ?? []).map((p) => ({
+        date: new Date(p.date),
+        value: p.value
+      })),
+    [series.wind]
   );
 
+  const allValues = useMemo(
+    () => [
+      ...solarParsed.map((p) => p.value),
+      ...windParsed.map((p) => p.value)
+    ],
+    [solarParsed, windParsed]
+  );
+  const minY = allValues.length ? Math.min(...allValues) : 0;
+  const maxY = allValues.length ? Math.max(...allValues) : 1;
+  const spanY = maxY - minY || 1;
+
+  const maxCount = Math.max(solarParsed.length, windParsed.length, 1);
   const width = 900;
   const height = 260;
   const padding = 40;
 
-  if (!parsed.length) {
+  const xScale = (i: number, count: number) =>
+    padding +
+    ((width - padding * 2) * i) / Math.max(1, count - 1);
+  const yScale = (v: number) =>
+    height - padding - ((height - padding * 2) * (v - minY)) / spanY;
+
+  const ticks = 4;
+  const yTicks = Array.from({ length: ticks + 1 }, (_, i) => {
+    const t = i / ticks;
+    const v = minY + spanY * t;
+    return { v, y: yScale(v) };
+  });
+
+  const refParsed = solarParsed.length ? solarParsed : windParsed;
+
+  if (!solarParsed.length && !windParsed.length) {
     return (
       <div
         style={{
@@ -89,207 +134,179 @@ function Chart({ points }: { points: Point[] }) {
     );
   }
 
-  const minY = Math.min(...parsed.map((p) => p.value));
-  const maxY = Math.max(...parsed.map((p) => p.value));
-  const count = parsed.length;
-  const spanY = maxY - minY || 1;
+  const xTickIndices = refParsed.length
+    ? Array.from({ length: 5 }, (_, i) =>
+        Math.round(((refParsed.length - 1) * i) / 4)
+      )
+    : [];
+  const xTicks = refParsed.length
+    ? Array.from(new Set(xTickIndices))
+        .filter((idx) => idx >= 0 && idx < refParsed.length)
+        .map((idx) => ({
+          idx,
+          x: xScale(idx, refParsed.length),
+          label: refParsed[idx].date.toLocaleString(undefined, {
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit"
+          })
+        }))
+    : [];
 
-  const xScale = (i: number) =>
-    padding + ((width - padding * 2) * i) / Math.max(1, count - 1);
-  const yScale = (v: number) =>
-    height - padding - ((height - padding * 2) * (v - minY)) / spanY;
+  const renderLine = (
+    key: "solar" | "wind",
+    parsed: SeriesEntry[],
+    color: string
+  ) => {
+    if (!parsed.length) return null;
+    const count = parsed.length;
+    const d = parsed
+      .map((p, i) =>
+        i === 0 ? `M ${xScale(i, count)} ${yScale(p.value)}` : `L ${xScale(i, count)} ${yScale(p.value)}`
+      )
+      .join(" ");
+    return (
+      <g key={key}>
+        <path
+          d={d}
+          fill="none"
+          stroke={color}
+          strokeWidth={2.1}
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+        {parsed.map((p, i) => {
+          const cx = xScale(i, count);
+          const cy = yScale(p.value);
+          return (
+            <g
+              key={i}
+              onMouseEnter={() => setHover({ key, index: i })}
+              onMouseLeave={() =>
+                setHover((prev) => (prev?.key === key && prev?.index === i ? null : prev))
+              }
+            >
+              <circle cx={cx} cy={cy} r={6} fill="transparent" stroke="transparent" />
+            </g>
+          );
+        })}
+      </g>
+    );
+  };
 
-  const d = parsed
-    .map((p, i) => `${i === 0 ? "M" : "L"} ${xScale(i)} ${yScale(p.value)}`)
-    .join(" ");
-
-  const ticks = 4;
-  const yTicks = Array.from({ length: ticks + 1 }, (_, i) => {
-    const t = i / ticks;
-    const v = minY + spanY * t;
-    return { v, y: yScale(v) };
-  });
-
-  const xTickIndices = Array.from({ length: 5 }, (_, i) =>
-    Math.round(((count - 1) * i) / 4)
-  );
-  const xTicks = Array.from(new Set(xTickIndices)).map((idx) => ({
-    idx,
-    x: xScale(idx),
-    label: parsed[idx].date.toLocaleString(undefined, {
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit"
-    })
-  }));
+  const hovered =
+    hover &&
+    (hover.key === "solar"
+      ? solarParsed[hover.index]
+      : windParsed[hover.index]);
 
   return (
-    <svg
-      viewBox={`0 0 ${width} ${height}`}
-      style={{
-        width: "100%",
-        maxWidth: width,
-        borderRadius: 16,
-        border: "1px solid rgba(148,163,184,0.4)",
-        background:
-          "radial-gradient(circle at top left, rgba(59,130,246,0.25), #020617 60%)",
-        boxShadow: "0 18px 45px rgba(15,23,42,0.9)"
-      }}
-    >
-      <defs>
-        <linearGradient id="line" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0%" stopColor="#22c55e" />
-          <stop offset="50%" stopColor="#eab308" />
-          <stop offset="100%" stopColor="#ef4444" />
-        </linearGradient>
-        <linearGradient id="fill" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="rgba(56,189,248,0.4)" />
-          <stop offset="100%" stopColor="rgba(15,23,42,0.05)" />
-        </linearGradient>
-      </defs>
-
-      {yTicks.map((t, idx) => (
-        <g key={idx}>
-          <line
-            x1={padding}
-            x2={width - padding}
-            y1={t.y}
-            y2={t.y}
-            stroke="rgba(148,163,184,0.35)"
-            strokeDasharray="4 6"
-          />
-          <text
-            x={padding - 10}
-            y={t.y + 4}
-            textAnchor="end"
-            fill="#9ca3af"
-            fontSize={10}
-          >
-            {t.v.toFixed(1)}
-          </text>
-        </g>
-      ))}
-
-      {xTicks.map((t) => (
-        <g key={t.idx}>
-          <line
-            x1={t.x}
-            x2={t.x}
-            y1={padding}
-            y2={height - padding}
-            stroke="rgba(148,163,184,0.25)"
-            strokeDasharray="4 6"
-          />
-          <text
-            x={t.x}
-            y={height - padding + 18}
-            textAnchor="middle"
-            fill="#9ca3af"
-            fontSize={9}
-          >
-            {t.label}
-          </text>
-        </g>
-      ))}
-
-      <path
-        d={`${d} L ${xScale(parsed.length - 1)} ${height - padding} L ${xScale(
-          0
-        )} ${height - padding} Z`}
-        fill="url(#fill)"
-        fillOpacity={0.9}
-      />
-      <path
-        d={d}
-        fill="none"
-        stroke="url(#line)"
-        strokeWidth={2.1}
-        strokeLinejoin="round"
-        strokeLinecap="round"
-      />
-
-      {parsed.map((p, i) => {
-        const cx = xScale(i);
-        const cy = yScale(p.value);
-        return (
-          <g
-            key={i}
-            onMouseEnter={() => setHoverIndex(i)}
-            onMouseLeave={() => setHoverIndex((prev) => (prev === i ? null : prev))}
-          >
-            <circle
-              cx={cx}
-              cy={cy}
-              r={6}
-              fill="transparent"
-              stroke="transparent"
-            />
-          </g>
-        );
-      })}
-
-      {hoverIndex != null && parsed[hoverIndex] && (
-        <>
-          {(() => {
-            const p = parsed[hoverIndex];
-            const cx = xScale(hoverIndex);
-            const cy = yScale(p.value);
-            const tooltipWidth = 190;
-            const tooltipHeight = 52;
-            const tx = Math.min(
-              Math.max(cx + 10, padding),
-              width - padding - tooltipWidth
-            );
-            const ty = Math.max(cy - tooltipHeight - 10, padding);
-            const labelDate = p.date.toLocaleString(undefined, {
-              year: "numeric",
-              month: "2-digit",
-              day: "2-digit",
-              hour: "2-digit",
-              minute: "2-digit"
-            });
-            return (
-              <g>
-                <line
-                  x1={cx}
-                  x2={cx}
-                  y1={padding}
-                  y2={height - padding}
-                  stroke="rgba(248,250,252,0.35)"
-                  strokeDasharray="4 4"
-                />
-                <circle
-                  cx={cx}
-                  cy={cy}
-                  r={4}
-                  fill="#f97316"
-                  stroke="#fefce8"
-                  strokeWidth={1.4}
-                />
-                <rect
-                  x={tx}
-                  y={ty}
-                  width={tooltipWidth}
-                  height={tooltipHeight}
-                  rx={8}
-                  ry={8}
-                  fill="rgba(15,23,42,0.96)"
-                  stroke="rgba(148,163,184,0.9)"
-                  strokeWidth={1}
-                />
-                <text x={tx + 10} y={ty + 18} fill="#e5e7eb" fontSize={11}>
-                  {labelDate}
-                </text>
-                <text x={tx + 10} y={ty + 34} fill="#38bdf8" fontSize={12}>
-                  {p.value.toFixed(3)} kWh
-                </text>
-              </g>
-            );
-          })()}
-        </>
+    <div>
+      {(series.solar?.length || series.wind?.length) && (
+        <div style={{ display: "flex", gap: 16, marginBottom: 8, fontSize: 12 }}>
+          {series.solar?.length ? (
+            <span style={{ color: "#22c55e" }}>● Solar</span>
+          ) : null}
+          {series.wind?.length ? (
+            <span style={{ color: "#3b82f6" }}>● Wind</span>
+          ) : null}
+        </div>
       )}
-    </svg>
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        style={{
+          width: "100%",
+          maxWidth: width,
+          borderRadius: 16,
+          border: "1px solid rgba(148,163,184,0.4)",
+          background:
+            "radial-gradient(circle at top left, rgba(59,130,246,0.25), #020617 60%)",
+          boxShadow: "0 18px 45px rgba(15,23,42,0.9)"
+        }}
+      >
+        <defs>
+          <linearGradient id="fillSolar" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="rgba(34,197,94,0.2)" />
+            <stop offset="100%" stopColor="rgba(15,23,42,0.02)" />
+          </linearGradient>
+          <linearGradient id="fillWind" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="rgba(59,130,246,0.2)" />
+            <stop offset="100%" stopColor="rgba(15,23,42,0.02)" />
+          </linearGradient>
+        </defs>
+
+        {yTicks.map((t, idx) => (
+          <g key={idx}>
+            <line
+              x1={padding}
+              x2={width - padding}
+              y1={t.y}
+              y2={t.y}
+              stroke="rgba(148,163,184,0.35)"
+              strokeDasharray="4 6"
+            />
+            <text
+              x={padding - 10}
+              y={t.y + 4}
+              textAnchor="end"
+              fill="#9ca3af"
+              fontSize={10}
+            >
+              {t.v.toFixed(1)}
+            </text>
+          </g>
+        ))}
+
+        {xTicks.map((t) => (
+          <g key={t.idx}>
+            <line
+              x1={t.x}
+              x2={t.x}
+              y1={padding}
+              y2={height - padding}
+              stroke="rgba(148,163,184,0.25)"
+              strokeDasharray="4 6"
+            />
+            <text
+              x={t.x}
+              y={height - padding + 18}
+              textAnchor="middle"
+              fill="#9ca3af"
+              fontSize={9}
+            >
+              {t.label}
+            </text>
+          </g>
+        ))}
+
+        {renderLine("solar", solarParsed, "#22c55e")}
+        {renderLine("wind", windParsed, "#3b82f6")}
+
+        {hover && hovered && (() => {
+          const count = hover.key === "solar" ? solarParsed.length : windParsed.length;
+          const cx = xScale(hover.index, count);
+          const cy = yScale(hovered.value);
+          const tooltipW = 190;
+          const tooltipH = 52;
+          const tx = Math.min(Math.max(cx + 10, padding), width - padding - tooltipW);
+          const ty = Math.max(cy - tooltipH - 10, padding);
+          return (
+            <>
+              <line x1={cx} x2={cx} y1={padding} y2={height - padding} stroke="rgba(248,250,252,0.35)" strokeDasharray="4 4" />
+              <circle cx={cx} cy={cy} r={4} fill={hover.key === "solar" ? "#22c55e" : "#3b82f6"} stroke="#fefce8" strokeWidth={1.4} />
+              <rect x={tx} y={ty} width={tooltipW} height={tooltipH} rx={8} ry={8} fill="rgba(15,23,42,0.96)" stroke="rgba(148,163,184,0.9)" strokeWidth={1} />
+              <text x={tx + 10} y={ty + 18} fill="#e5e7eb" fontSize={11}>
+                {hovered.date.toLocaleString(undefined, { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}
+              </text>
+              <text x={tx + 10} y={ty + 34} fill={hover.key === "solar" ? "#22c55e" : "#3b82f6"} fontSize={12}>
+                {hover.key === "solar" ? "Solar" : "Wind"}: {hovered.value.toFixed(3)} kWh
+              </text>
+            </>
+          );
+        })()}
+      </svg>
+    </div>
   );
 }
 
@@ -344,7 +361,7 @@ function Stats({
   );
 }
 
-function DataTable({ points }: { points: Point[] }) {
+function DataTable({ points, label }: { points: Point[]; label?: string }) {
   const slice = points.slice(0, 30);
   if (!slice.length) return null;
   return (
@@ -369,7 +386,7 @@ function DataTable({ points }: { points: Point[] }) {
         }}
       >
         <div>Date / Time</div>
-        <div style={{ textAlign: "right" }}>Production (kWh)</div>
+        <div style={{ textAlign: "right" }}>{label ? `${label} ` : ""}Production (kWh)</div>
       </div>
       <div style={{ maxHeight: 260, overflow: "auto" }}>
         {slice.map((p, idx) => {
@@ -405,78 +422,116 @@ function DataTable({ points }: { points: Point[] }) {
   );
 }
 
+function filterPoints(
+  points: Point[],
+  opts: { dataset: Dataset; year: number | null; month: number | null; day: number | null; isWind: boolean }
+): Point[] {
+  return points.filter((p) => {
+    const d = new Date(p.date);
+    if (opts.isWind && opts.year != null && d.getFullYear() !== opts.year) return false;
+    if (opts.month != null && d.getMonth() + 1 !== opts.month) return false;
+    if (opts.day != null && d.getDate() !== opts.day) return false;
+    return true;
+  });
+}
+
 export default function Page() {
   const [dataset, setDataset] = useState<Dataset>("solar");
   const [year, setYear] = useState<number | null>(null);
   const [month, setMonth] = useState<number | null>(null);
   const [day, setDay] = useState<number | null>(null);
-  const { data, loading, error } = useTimeSeries(dataset, year);
+
+  const solarRes = useTimeSeries("solar", null);
+  const windRes = useTimeSeries("wind", year);
+
+  const solarData = solarRes.data;
+  const windData = windRes.data;
+  const data = dataset === "solar" ? solarData : dataset === "wind" ? windData : null;
+  const loading =
+    dataset === "both"
+      ? solarRes.loading || windRes.loading
+      : dataset === "solar"
+        ? solarRes.loading
+        : windRes.loading;
+  const error = dataset === "both" ? solarRes.error || windRes.error : dataset === "solar" ? solarRes.error : windRes.error;
+
+  const years = windData?.years ?? [];
 
   useEffect(() => {
-    if (!data) return;
     if (dataset === "solar") {
       setYear(null);
       return;
     }
-    if (!year || !data.years.includes(year)) {
-      const preferred = data.years.includes(1990) ? 1990 : data.years[0] ?? null;
-      setYear(preferred);
-      setMonth(null);
-      setDay(null);
-    }
-  }, [data, dataset, year]);
-
-  const parsedPoints = useMemo(() => {
-    const src = data?.points ?? [];
-    if (!src.length) return [] as Point[];
-    return src.filter((p) => {
-      const d = new Date(p.date);
-      if (dataset === "wind" && year != null && d.getFullYear() !== year) {
-        return false;
+    if (dataset === "both" || dataset === "wind") {
+      if (!year || !years.includes(year)) {
+        const preferred = years.includes(2020) ? 2020 : years[0] ?? null;
+        setYear(preferred);
+        if (dataset === "wind") {
+          setMonth(null);
+          setDay(null);
+        }
       }
-      if (month != null && d.getMonth() + 1 !== month) return false;
-      if (day != null && d.getDate() !== day) return false;
-      return true;
-    });
-  }, [data, dataset, year, month, day]);
+    }
+  }, [dataset, year, years]);
+
+  const parsedSolar = useMemo(
+    () =>
+      filterPoints(solarData?.points ?? [], {
+        dataset,
+        year,
+        month,
+        day,
+        isWind: false
+      }),
+    [solarData, dataset, year, month, day]
+  );
+  const parsedWind = useMemo(
+    () =>
+      filterPoints(windData?.points ?? [], {
+        dataset,
+        year,
+        month,
+        day,
+        isWind: true
+      }),
+    [windData, dataset, year, month, day]
+  );
 
   const monthOptions = useMemo(() => {
-    const src = data?.points ?? [];
     const set = new Set<number>();
-    for (const p of src) {
+    for (const p of solarData?.points ?? []) {
+      set.add(new Date(p.date).getMonth() + 1);
+    }
+    for (const p of windData?.points ?? []) {
       const d = new Date(p.date);
-      if (dataset === "wind" && year != null && d.getFullYear() !== year) {
-        continue;
-      }
+      if (year != null && d.getFullYear() !== year) continue;
       set.add(d.getMonth() + 1);
     }
     return Array.from(set).sort((a, b) => a - b);
-  }, [data, dataset, year]);
+  }, [solarData, windData, year]);
 
   const dayOptions = useMemo(() => {
-    const src = data?.points ?? [];
     const set = new Set<number>();
-    for (const p of src) {
+    for (const p of solarData?.points ?? []) {
       const d = new Date(p.date);
-      if (dataset === "wind" && year != null && d.getFullYear() !== year) {
-        continue;
-      }
+      if (month != null && d.getMonth() + 1 !== month) continue;
+      set.add(d.getDate());
+    }
+    for (const p of windData?.points ?? []) {
+      const d = new Date(p.date);
+      if (year != null && d.getFullYear() !== year) continue;
       if (month != null && d.getMonth() + 1 !== month) continue;
       set.add(d.getDate());
     }
     return Array.from(set).sort((a, b) => a - b);
-  }, [data, dataset, year, month]);
+  }, [solarData, windData, year, month]);
 
   useEffect(() => {
-    if (month != null && !monthOptions.includes(month)) {
-      setMonth(null);
-    }
+    if (month != null && !monthOptions.includes(month)) setMonth(null);
   }, [month, monthOptions]);
 
   useEffect(() => {
-    if (day != null && !dayOptions.includes(day)) {
-      setDay(null);
-    }
+    if (day != null && !dayOptions.includes(day)) setDay(null);
   }, [day, dayOptions]);
 
   return (
@@ -570,9 +625,10 @@ export default function Page() {
                 >
                   <option value="solar">Solar (hourly)</option>
                   <option value="wind">Wind (hourly)</option>
+                  <option value="both">Both (overlay)</option>
                 </select>
               </label>
-              {dataset === "wind" && (
+              {(dataset === "wind" || dataset === "both") && (
                 <label
                   style={{
                     fontSize: 12,
@@ -671,7 +727,10 @@ export default function Page() {
               </label>
             </div>
             <div style={{ fontSize: 11, color: "#9ca3af" }}>
-              Showing {parsedPoints.length.toLocaleString()} points
+              Showing{" "}
+              {dataset === "both"
+                ? `${parsedSolar.length.toLocaleString()} solar + ${parsedWind.length.toLocaleString()} wind`
+                : `${(dataset === "solar" ? parsedSolar : parsedWind).length.toLocaleString()} points`}
             </div>
           </div>
 
@@ -691,7 +750,7 @@ export default function Page() {
                 color: "#9ca3af"
               }}
             >
-              Loading {dataset} data…
+              Loading {dataset === "both" ? "solar & wind" : dataset} data…
             </div>
           ) : error ? (
             <div
@@ -712,14 +771,39 @@ export default function Page() {
               Failed to load data: {error}
             </div>
           ) : (
-            <Chart points={parsedPoints} />
+            <Chart
+              series={{
+                solar: dataset === "solar" || dataset === "both" ? parsedSolar : undefined,
+                wind: dataset === "wind" || dataset === "both" ? parsedWind : undefined
+              }}
+            />
           )}
 
-          {data && <Stats stats={data.stats} />}
+          {dataset === "solar" && solarData && <Stats stats={solarData.stats} />}
+          {dataset === "wind" && windData && <Stats stats={windData.stats} />}
+          {dataset === "both" && (
+            <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+              {solarData && (
+                <div>
+                  <div style={{ fontSize: 11, color: "#22c55e", marginBottom: 4 }}>Solar</div>
+                  <Stats stats={solarData.stats} />
+                </div>
+              )}
+              {windData && (
+                <div>
+                  <div style={{ fontSize: 11, color: "#3b82f6", marginBottom: 4 }}>Wind</div>
+                  <Stats stats={windData.stats} />
+                </div>
+              )}
+            </div>
+          )}
         </section>
 
         <section style={{ flex: 2 }}>
-          <DataTable points={parsedPoints} />
+          <DataTable
+            points={dataset === "wind" ? parsedWind : parsedSolar}
+            label={dataset === "both" ? "Solar (sample)" : undefined}
+          />
         </section>
       </main>
     </div>
