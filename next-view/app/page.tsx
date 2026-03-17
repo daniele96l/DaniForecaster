@@ -27,7 +27,9 @@ function useTimeSeries(dataset: Dataset, year: number | null) {
         setLoading(true);
         setError(null);
         const params = new URLSearchParams({ dataset });
-        if (year != null) params.set("year", String(year));
+        if (dataset === "wind" && year != null) {
+          params.set("year", String(year));
+        }
         const res = await fetch(`/api/data?${params.toString()}`);
         const json = (await res.json()) as ApiResponse;
         if (!res.ok || json.error) {
@@ -412,49 +414,58 @@ export default function Page() {
 
   useEffect(() => {
     if (!data) return;
-    if (!year || !data.years.includes(year)) {
-      const preferred =
-        dataset === "solar" && data.years.includes(1990)
-          ? 1990
-          : data.years[0] ?? null;
-      setYear(preferred);
+    if (dataset === "solar") {
+      setYear(null);
+      return;
     }
-  }, [data, dataset]);
+    if (!year || !data.years.includes(year)) {
+      const preferred = data.years.includes(1990) ? 1990 : data.years[0] ?? null;
+      setYear(preferred);
+      setMonth(null);
+      setDay(null);
+    }
+  }, [data, dataset, year]);
 
   const parsedPoints = useMemo(() => {
     const src = data?.points ?? [];
     if (!src.length) return [] as Point[];
     return src.filter((p) => {
       const d = new Date(p.date);
-      if (year != null && d.getFullYear() !== year) return false;
+      if (dataset === "wind" && year != null && d.getFullYear() !== year) {
+        return false;
+      }
       if (month != null && d.getMonth() + 1 !== month) return false;
       if (day != null && d.getDate() !== day) return false;
       return true;
     });
-  }, [data, year, month, day]);
+  }, [data, dataset, year, month, day]);
 
   const monthOptions = useMemo(() => {
     const src = data?.points ?? [];
     const set = new Set<number>();
     for (const p of src) {
       const d = new Date(p.date);
-      if (year != null && d.getFullYear() !== year) continue;
+      if (dataset === "wind" && year != null && d.getFullYear() !== year) {
+        continue;
+      }
       set.add(d.getMonth() + 1);
     }
     return Array.from(set).sort((a, b) => a - b);
-  }, [data, year]);
+  }, [data, dataset, year]);
 
   const dayOptions = useMemo(() => {
     const src = data?.points ?? [];
     const set = new Set<number>();
     for (const p of src) {
       const d = new Date(p.date);
-      if (year != null && d.getFullYear() !== year) continue;
+      if (dataset === "wind" && year != null && d.getFullYear() !== year) {
+        continue;
+      }
       if (month != null && d.getMonth() + 1 !== month) continue;
       set.add(d.getDate());
     }
     return Array.from(set).sort((a, b) => a - b);
-  }, [data, year, month]);
+  }, [data, dataset, year, month]);
 
   useEffect(() => {
     if (month != null && !monthOptions.includes(month)) {
@@ -561,37 +572,39 @@ export default function Page() {
                   <option value="wind">Wind (hourly)</option>
                 </select>
               </label>
-              <label
-                style={{
-                  fontSize: 12,
-                  textTransform: "uppercase",
-                  letterSpacing: 0.08,
-                  color: "#9ca3af"
-                }}
-              >
-                Year
-                <select
-                  value={year ?? ""}
-                  onChange={(e) =>
-                    setYear(e.target.value ? Number(e.target.value) : null)
-                  }
+              {dataset === "wind" && (
+                <label
                   style={{
-                    marginLeft: 8,
-                    padding: "6px 10px",
-                    borderRadius: 999,
-                    border: "1px solid rgba(148,163,184,0.6)",
-                    background: "#020617",
-                    color: "#e5e7eb",
-                    fontSize: 13
+                    fontSize: 12,
+                    textTransform: "uppercase",
+                    letterSpacing: 0.08,
+                    color: "#9ca3af"
                   }}
                 >
-                  {(data?.years ?? []).map((y) => (
-                    <option key={y} value={y}>
-                      {y}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  Year
+                  <select
+                    value={year ?? ""}
+                    onChange={(e) =>
+                      setYear(e.target.value ? Number(e.target.value) : null)
+                    }
+                    style={{
+                      marginLeft: 8,
+                      padding: "6px 10px",
+                      borderRadius: 999,
+                      border: "1px solid rgba(148,163,184,0.6)",
+                      background: "#020617",
+                      color: "#e5e7eb",
+                      fontSize: 13
+                    }}
+                  >
+                    {(data?.years ?? []).map((y) => (
+                      <option key={y} value={y}>
+                        {y}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               <label
                 style={{
                   fontSize: 12,
