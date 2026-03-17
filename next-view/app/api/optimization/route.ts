@@ -149,6 +149,49 @@ function parseOverallWithBaseloadCsv(text: string) {
   return { bestS, bestW, bestB, series };
 }
 
+function parseGridSearchLogCsv(text: string): GridSample[] {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (lines.length < 2) return [];
+
+  const header = splitCsvLine(lines[0]);
+  const cols: Record<string, number> = {};
+  header.forEach((name, idx) => {
+    cols[name.trim().toLowerCase()] = idx;
+  });
+
+  const sIdx = cols["s_mw"];
+  const wIdx = cols["w_mw"];
+  const bIdx = cols["baseload_mw"];
+  const avgIdx = cols["dailyavgprod_mw"];
+  const errIdx = cols["dailyerrorpct"];
+
+  if (sIdx == null || wIdx == null || bIdx == null) {
+    return [];
+  }
+
+  const samples: GridSample[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const parts = splitCsvLine(lines[i]);
+    if (parts.length <= Math.max(sIdx, wIdx, bIdx)) continue;
+    const sMw = Number(parts[sIdx]);
+    const wMw = Number(parts[wIdx]);
+    const baseloadMw = Number(parts[bIdx]);
+    const dailyAvgProductionMw =
+      avgIdx != null && parts[avgIdx] != null ? Number(parts[avgIdx]) : undefined;
+    const dailyErrorPct =
+      errIdx != null && parts[errIdx] != null ? Number(parts[errIdx]) : undefined;
+    samples.push({
+      sMw,
+      wMw,
+      baseloadMw,
+      dailyAvgProductionMw,
+      dailyErrorPct
+    });
+  }
+
+  return samples;
+}
+
 export async function POST(request: Request) {
   try {
     const root = process.cwd();
@@ -166,16 +209,14 @@ export async function POST(request: Request) {
     const text = await fs.readFile(outPath, "utf8");
     const { bestS, bestW, bestB, series } = parseOverallWithBaseloadCsv(text);
 
-    const firstDailyAvg = series[0]?.dailyAvgProd ?? 0;
-    const gridSamples: GridSample[] = [
-      {
-        sMw: bestS,
-        wMw: bestW,
-        baseloadMw: bestB,
-        dailyAvgProductionMw: firstDailyAvg,
-        dailyErrorPct: bestB > 0 ? (firstDailyAvg - bestB) / bestB : 0
-      }
-    ];
+    let gridSamples: GridSample[] = [];
+    try {
+      const logPath = path.join(projectRoot, "grid_search_log.csv");
+      const logText = await fs.readFile(logPath, "utf8");
+      gridSamples = parseGridSearchLogCsv(logText);
+    } catch {
+      gridSamples = [];
+    }
 
     const result: OptimizationResult = {
       bestS,

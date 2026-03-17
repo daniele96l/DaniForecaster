@@ -4,7 +4,7 @@ Energy Optimization - Simple, Flat Version
 No nested functions, straightforward logic.
 """
 
-from typing import Tuple
+from typing import Tuple, List, Dict
 
 import numpy as np
 import pandas as pd
@@ -122,6 +122,8 @@ def search_best_capacities(
     best_S = 0.0
     best_W = 0.0
 
+    grid_log: List[Dict[str, float]] = []
+
     for S in S_values:
         for W in W_values:
             if S == 0 and W == 0:
@@ -131,6 +133,20 @@ def search_best_capacities(
             B = find_baseload(P, target_curtailment=0.10)
 
             daily_avg_production = float(np.mean(P))
+            daily_error_pct = (
+                (daily_avg_production - B) / B if B > 0 else 0.0
+            )
+
+            grid_log.append(
+                {
+                    "S_MW": float(S),
+                    "W_MW": float(W),
+                    "Baseload_MW": float(B),
+                    "DailyAvgProd_MW": daily_avg_production,
+                    "DailyErrorPct": daily_error_pct,
+                }
+            )
+
             if B > best_B and daily_avg_production >= 0.7 * B:
                 print(
                     "New best candidate -> "
@@ -142,6 +158,11 @@ def search_best_capacities(
                 best_B = B
                 best_S = S
                 best_W = W
+
+    if grid_log:
+        print("Writing grid search log to grid_search_log.csv ...")
+        df_log = pd.DataFrame(grid_log)
+        df_log.to_csv("grid_search_log.csv", index=False)
 
     if best_B <= 0:
         print("ERROR: Could not find valid solution")

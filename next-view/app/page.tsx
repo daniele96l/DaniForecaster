@@ -99,10 +99,12 @@ function Chart({
   const width = 900;
   const height = 260;
   const padding = 40;
+  const rightExtraFraction = 0.1;
 
   const xScale = (i: number, count: number) =>
     padding +
-    ((width - padding * 2) * i) / Math.max(1, count - 1);
+    ((width - padding * 2) * i) /
+      Math.max(1, (count - 1) * (1 + rightExtraFraction));
   const yScale = (v: number) =>
     height - padding - ((height - padding * 2) * (v - minY)) / spanY;
 
@@ -1009,6 +1011,7 @@ function OptimizationPanel() {
 
   const [optMonth, setOptMonth] = useState<number | null>(null);
   const [optDay, setOptDay] = useState<number | null>(null);
+  const [showLog, setShowLog] = useState(false);
 
   const best = result
     ? {
@@ -1072,13 +1075,41 @@ function OptimizationPanel() {
     return Array.from(byDay.values()).sort((a, b) => a.day - b.day);
   }, [result, optMonth]);
 
+  const intervalStats =
+    focusedSeries && focusedSeries.length > 0 && result
+      ? (() => {
+          const n = focusedSeries.length;
+          const sumProd = focusedSeries.reduce(
+            (acc, p) => acc + p.productionCombined,
+            0
+          );
+          const sumCurt = focusedSeries.reduce(
+            (acc, p) => acc + p.curtailment,
+            0
+          );
+          const sumShortfallFrac = focusedSeries.reduce((acc, p) => {
+            const diff = p.baseload - p.productionCombined;
+            const frac = p.baseload > 0 ? diff / p.baseload : 0;
+            return acc + frac;
+          }, 0);
+          const avgProd = sumProd / n;
+          const avgCurt = sumCurt / n;
+          const avgShortfallFrac = sumShortfallFrac / n;
+          return {
+            avgProd,
+            avgCurt,
+            avgShortfallFrac
+          };
+        })()
+      : null;
+
   return (
     <div
       style={{
-        display: "grid",
-        gridTemplateColumns: "minmax(0, 2fr) minmax(0, 1fr)",
-        gap: 16,
-        alignItems: "flex-start"
+        display: "flex",
+        flexDirection: "column",
+        gap: 12,
+        alignItems: "stretch"
       }}
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -1101,8 +1132,12 @@ function OptimizationPanel() {
             >
               Optimization
             </div>
-            <div style={{ fontSize: 14 }}>
-              Grid search over capacities to maximize baseload at ~10% curtailment.
+            <div style={{ fontSize: 13, maxWidth: 520, lineHeight: 1.4 }}>
+              We scan a grid of solar (S) and wind (W) capacities, compute the
+              resulting hourly production, and for each pair find the baseload B
+              that gives about 10% curtailment (energy above B). We only accept
+              combinations where the average production is at least 70% of B,
+              and among those we pick the one with the highest baseload.
             </div>
           </div>
           <button
@@ -1123,6 +1158,23 @@ function OptimizationPanel() {
           >
             {status === "running" ? "Running…" : "Run optimization"}
           </button>
+          {result && result.gridSamples && result.gridSamples.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowLog(true)}
+              style={{
+                padding: "6px 10px",
+                borderRadius: 999,
+                border: "1px solid rgba(148,163,184,0.7)",
+                background: "#020617",
+                color: "#e5e7eb",
+                fontSize: 11,
+                cursor: "pointer"
+              }}
+            >
+              View optimization log
+            </button>
+          )}
         </div>
 
         {result && (
@@ -1303,6 +1355,205 @@ function OptimizationPanel() {
           </div>
         )}
 
+        {intervalStats && (
+          <div
+            style={{
+              marginTop: 8,
+              display: "grid",
+              gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+              gap: 12
+            }}
+          >
+            {[
+              {
+                label: "Avg combined production (focused interval)",
+                value: `${intervalStats.avgProd.toFixed(2)} MW`
+              },
+              {
+                label: "Avg curtailment above baseload",
+                value: `${intervalStats.avgCurt.toFixed(2)} MW`
+              },
+              {
+                label: "Avg shortfall vs baseload",
+                value: `${(intervalStats.avgShortfallFrac * 100).toFixed(1)} % of baseload`
+              }
+            ].map((item) => (
+              <div
+                key={item.label}
+                style={{
+                  padding: "10px 12px",
+                  borderRadius: 12,
+                  border: "1px solid rgba(148,163,184,0.4)",
+                  background:
+                    "linear-gradient(135deg, rgba(15,23,42,0.9), rgba(96,165,250,0.3))",
+                  fontSize: 12,
+                  color: "#e5e7eb"
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 11,
+                    textTransform: "uppercase",
+                    letterSpacing: 0.08,
+                    color: "#9ca3af",
+                    marginBottom: 4
+                  }}
+                >
+                  {item.label}
+                </div>
+                <div style={{ fontSize: 16, fontWeight: 600 }}>{item.value}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {showLog && result && result.gridSamples && (
+          <div
+            style={{
+              position: "fixed",
+              inset: 0,
+              backgroundColor: "rgba(15,23,42,0.85)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 50
+            }}
+          >
+            <div
+              style={{
+                width: "90%",
+                maxWidth: 900,
+                maxHeight: "80vh",
+                borderRadius: 16,
+                border: "1px solid rgba(148,163,184,0.7)",
+                background:
+                  "radial-gradient(circle at top, rgba(15,23,42,0.98), rgba(15,23,42,1))",
+                boxShadow: "0 25px 60px rgba(0,0,0,0.8)",
+                display: "flex",
+                flexDirection: "column"
+              }}
+            >
+              <div
+                style={{
+                  padding: "10px 14px",
+                  borderBottom: "1px solid rgba(148,163,184,0.4)",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 8
+                }}
+              >
+                <div>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      textTransform: "uppercase",
+                      letterSpacing: 0.08,
+                      color: "#9ca3af"
+                    }}
+                  >
+                    Optimization log
+                  </div>
+                  <div style={{ fontSize: 13, color: "#e5e7eb" }}>
+                    Tested combinations of solar (S) and wind (W) capacities.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowLog(false)}
+                  style={{
+                    padding: "4px 10px",
+                    borderRadius: 999,
+                    border: "1px solid rgba(148,163,184,0.7)",
+                    background: "#020617",
+                    color: "#e5e7eb",
+                    fontSize: 11,
+                    cursor: "pointer"
+                  }}
+                >
+                  Close
+                </button>
+              </div>
+              <div
+                style={{
+                  padding: "10px 14px",
+                  overflow: "auto",
+                  fontSize: 11
+                }}
+              >
+                <table
+                  style={{
+                    width: "100%",
+                    borderCollapse: "collapse",
+                    minWidth: 480
+                  }}
+                >
+                  <thead>
+                    <tr>
+                      {[
+                        "S (MW)",
+                        "W (MW)",
+                        "Baseload (MW)",
+                        "Daily avg prod (MW)",
+                        "Daily error vs B (%)"
+                      ].map((h) => (
+                        <th
+                          key={h}
+                          style={{
+                            textAlign: "right",
+                            padding: "6px 8px",
+                            borderBottom: "1px solid rgba(148,163,184,0.5)",
+                            color: "#9ca3af",
+                            fontWeight: 500,
+                            whiteSpace: "nowrap"
+                          }}
+                        >
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.gridSamples.map((s, idx) => (
+                      <tr
+                        key={idx}
+                        style={{
+                          backgroundColor:
+                            s.sMw === result.bestS && s.wMw === result.bestW
+                              ? "rgba(34,197,94,0.15)"
+                              : idx % 2 === 0
+                                ? "rgba(15,23,42,0.9)"
+                                : "rgba(15,23,42,0.8)"
+                        }}
+                      >
+                        <td style={{ textAlign: "right", padding: "4px 8px" }}>
+                          {s.sMw.toFixed(1)}
+                        </td>
+                        <td style={{ textAlign: "right", padding: "4px 8px" }}>
+                          {s.wMw.toFixed(1)}
+                        </td>
+                        <td style={{ textAlign: "right", padding: "4px 8px" }}>
+                          {s.baseloadMw.toFixed(2)}
+                        </td>
+                        <td style={{ textAlign: "right", padding: "4px 8px" }}>
+                          {s.dailyAvgProductionMw != null
+                            ? s.dailyAvgProductionMw.toFixed(2)
+                            : "—"}
+                        </td>
+                        <td style={{ textAlign: "right", padding: "4px 8px" }}>
+                          {s.dailyErrorPct != null
+                            ? (s.dailyErrorPct * 100).toFixed(2)
+                            : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
         {focusedSeries && focusedSeries.length > 0 && (
           <>
             <div style={{ marginTop: 8 }}>
@@ -1315,7 +1566,7 @@ function OptimizationPanel() {
                   marginBottom: 4
                 }}
               >
-                Production vs baseload (focused interval)
+                Combined production vs baseload (focused interval)
               </div>
               <Chart
                 series={{
@@ -1328,7 +1579,7 @@ function OptimizationPanel() {
                     value: p.baseload
                   }))
                 }}
-                labels={{ solar: "Prod combined", wind: "Baseload" }}
+                labels={{ solar: "Combined production", wind: "Baseload" }}
               />
             </div>
 
@@ -1350,7 +1601,7 @@ function OptimizationPanel() {
                     marginBottom: 4
                   }}
                 >
-                  Curtailment (MW)
+                Curtailment above baseload (MW)
                 </div>
                 <Chart
                   series={{
@@ -1359,7 +1610,7 @@ function OptimizationPanel() {
                       value: p.curtailment
                     }))
                   }}
-                  labels={{ solar: "Curtailment" }}
+                labels={{ solar: "Curtailment above baseload" }}
                 />
               </div>
               <div>
@@ -1372,7 +1623,7 @@ function OptimizationPanel() {
                     marginBottom: 4
                   }}
                 >
-                  Shortfall vs baseload (fraction)
+                Shortfall vs baseload (fraction of baseload)
                 </div>
                 <Chart
                   series={{
@@ -1386,7 +1637,7 @@ function OptimizationPanel() {
                       };
                     })
                   }}
-                  labels={{ solar: "Shortfall" }}
+                  labels={{ solar: "Shortfall vs baseload" }}
                 />
               </div>
             </div>
