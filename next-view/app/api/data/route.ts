@@ -20,6 +20,23 @@ function parseDateTime(value: string): Date | null {
   return new Date(year, month, day, hour, minute);
 }
 
+// Wind CSV is now "DD/MM HH:MM" without a year.
+// Assume a synthetic constant year so we can still build Date objects.
+function parseWindDateTime(value: string): Date | null {
+  if (!value) return null;
+  const [datePart, timePart] = value.split(" ");
+  if (!datePart) return null;
+  const [d, m] = datePart.split("/");
+  const [hh = "00", mm = "00"] = (timePart || "00:00").split(":");
+  const year = 2020;
+  const day = Number(d);
+  const month = Number(m) - 1;
+  const hour = Number(hh);
+  const minute = Number(mm);
+  if (!Number.isFinite(day) || !Number.isFinite(month)) return null;
+  return new Date(year, month, day, hour, minute);
+}
+
 function parseSolarCsv(text: string): Point[] {
   const lines = text.split(/\r?\n/);
   const dataLines = lines.slice(3);
@@ -45,7 +62,7 @@ function parseWindCsv(text: string): Point[] {
     if (!line) continue;
     const [dateStrRaw, valueStr] = line.split(",");
     const dateStr = dateStrRaw?.replace(/"/g, "");
-    const date = parseDateTime(dateStr);
+    const date = parseWindDateTime(dateStr);
     const value = parseFloat(valueStr);
     if (!date || !Number.isFinite(value)) continue;
     out.push({ date: date.toISOString(), value });

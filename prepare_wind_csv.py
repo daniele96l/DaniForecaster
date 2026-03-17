@@ -22,11 +22,34 @@ def main() -> None:
         df_melted["Hour"] - 1, unit="h"
     )
 
-    # Drop NaNs and sort by datetime before formatting
-    result = df_melted[["Date", "Production, KWh"]].dropna().sort_values("Date")
+    # Drop NaNs before aggregating
+    df_melted = df_melted.dropna(subset=["Production, KWh"])
 
-    # Format as DD/MM/YYYY HH:MM
-    result["Date"] = result["Date"].dt.strftime("%d/%m/%Y %H:%M")
+    # Group by month, day, and hour (year-agnostic) and average over years
+    df_melted["Month"] = df_melted["Date"].dt.month
+    df_melted["Day"] = df_melted["Date"].dt.day
+    df_melted["HourOfDay"] = df_melted["Date"].dt.hour
+
+    grouped = (
+        df_melted.groupby(["Month", "Day", "HourOfDay"], as_index=False)[
+            "Production, KWh"
+        ].mean()
+    )
+
+    # Build a synthetic date to format as DD/MM HH:MM (no year)
+    synthetic_dt = pd.to_datetime(
+        dict(
+            year=2000,
+            month=grouped["Month"],
+            day=grouped["Day"],
+            hour=grouped["HourOfDay"],
+        )
+    )
+    grouped["Date"] = synthetic_dt.dt.strftime("%d/%m %H:%M")
+
+    result = grouped.sort_values(["Month", "Day", "HourOfDay"])[
+        ["Date", "Production, KWh"]
+    ]
     result.to_csv("Wind.csv", index=False)
 
 
