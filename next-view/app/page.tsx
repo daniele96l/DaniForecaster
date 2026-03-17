@@ -440,6 +440,8 @@ export default function Page() {
   const [year, setYear] = useState<number | null>(null);
   const [month, setMonth] = useState<number | null>(null);
   const [day, setDay] = useState<number | null>(null);
+   const [solarScale, setSolarScale] = useState<number>(1);
+   const [windScale, setWindScale] = useState<number>(1);
 
   const solarRes = useTimeSeries("solar", null);
   const windRes = useTimeSeries("wind", year);
@@ -496,6 +498,27 @@ export default function Page() {
       }),
     [windData, dataset, year, month, day]
   );
+
+  const scaledSolar = useMemo(
+    () => parsedSolar.map((p) => ({ ...p, value: p.value * solarScale })),
+    [parsedSolar, solarScale]
+  );
+  const scaledWind = useMemo(
+    () => parsedWind.map((p) => ({ ...p, value: p.value * windScale })),
+    [parsedWind, windScale]
+  );
+
+  function computeStats(points: Point[]) {
+    if (!points.length) {
+      return { min: null, max: null, avg: null, count: 0 };
+    }
+    const values = points.map((p) => p.value);
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const sum = values.reduce((a, b) => a + b, 0);
+    const avg = sum / values.length;
+    return { min, max, avg, count: points.length };
+  }
 
   const monthOptions = useMemo(() => {
     const set = new Set<number>();
@@ -726,6 +749,77 @@ export default function Page() {
                 </select>
               </label>
             </div>
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 12,
+                alignItems: "center"
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 6,
+                  minWidth: 180
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    fontSize: 11,
+                    textTransform: "uppercase",
+                    letterSpacing: 0.08,
+                    color: "#9ca3af"
+                  }}
+                >
+                  <span>Solar scale</span>
+                  <span style={{ color: "#e5e7eb" }}>{solarScale.toFixed(1)}×</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={3}
+                  step={0.1}
+                  value={solarScale}
+                  onChange={(e) => setSolarScale(Number(e.target.value))}
+                  style={{ width: "100%" }}
+                />
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 6,
+                  minWidth: 180
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    fontSize: 11,
+                    textTransform: "uppercase",
+                    letterSpacing: 0.08,
+                    color: "#9ca3af"
+                  }}
+                >
+                  <span>Wind scale</span>
+                  <span style={{ color: "#e5e7eb" }}>{windScale.toFixed(1)}×</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={15}
+                  step={0.1}
+                  value={windScale}
+                  onChange={(e) => setWindScale(Number(e.target.value))}
+                  style={{ width: "100%" }}
+                />
+              </div>
+            </div>
             <div style={{ fontSize: 11, color: "#9ca3af" }}>
               Showing{" "}
               {dataset === "both"
@@ -773,26 +867,30 @@ export default function Page() {
           ) : (
             <Chart
               series={{
-                solar: dataset === "solar" || dataset === "both" ? parsedSolar : undefined,
-                wind: dataset === "wind" || dataset === "both" ? parsedWind : undefined
+                solar: dataset === "solar" || dataset === "both" ? scaledSolar : undefined,
+                wind: dataset === "wind" || dataset === "both" ? scaledWind : undefined
               }}
             />
           )}
 
-          {dataset === "solar" && solarData && <Stats stats={solarData.stats} />}
-          {dataset === "wind" && windData && <Stats stats={windData.stats} />}
+          {dataset === "solar" && (
+            <Stats stats={computeStats(scaledSolar)} />
+          )}
+          {dataset === "wind" && (
+            <Stats stats={computeStats(scaledWind)} />
+          )}
           {dataset === "both" && (
             <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
-              {solarData && (
+              {scaledSolar.length > 0 && (
                 <div>
                   <div style={{ fontSize: 11, color: "#22c55e", marginBottom: 4 }}>Solar</div>
-                  <Stats stats={solarData.stats} />
+                  <Stats stats={computeStats(scaledSolar)} />
                 </div>
               )}
-              {windData && (
+              {scaledWind.length > 0 && (
                 <div>
                   <div style={{ fontSize: 11, color: "#3b82f6", marginBottom: 4 }}>Wind</div>
-                  <Stats stats={windData.stats} />
+                  <Stats stats={computeStats(scaledWind)} />
                 </div>
               )}
             </div>
@@ -801,8 +899,14 @@ export default function Page() {
 
         <section style={{ flex: 2 }}>
           <DataTable
-            points={dataset === "wind" ? parsedWind : parsedSolar}
-            label={dataset === "both" ? "Solar (sample)" : undefined}
+            points={dataset === "wind" ? scaledWind : scaledSolar}
+            label={
+              dataset === "both"
+                ? "Solar (scaled sample)"
+                : dataset === "solar"
+                  ? "Solar (scaled)"
+                  : "Wind (scaled)"
+            }
           />
         </section>
       </main>
