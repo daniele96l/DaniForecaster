@@ -72,11 +72,6 @@ def find_baseload(production, target_curtailment=0.10):
     return 0.5 * (lo + hi)
 
 
-def compute_production(solar, wind, solar_capacity, wind_capacity):
-    """Compute combined production: P = S*solar + W*wind using raw profiles."""
-    return solar_capacity * solar + wind_capacity * wind
-
-
 # ============================================================================
 # MAIN OPTIMIZATION
 # ============================================================================
@@ -129,7 +124,7 @@ def run_optimization():
                 continue
 
             # Compute production for this (S, W) using raw profiles
-            P = compute_production(solar_raw, wind_raw, S, W)
+            P = S * solar_raw + W * wind_raw
 
             # Find baseload that gives ~10% curtailment
             B = find_baseload(P, target_curtailment=0.10)
@@ -145,7 +140,7 @@ def run_optimization():
         return
 
     # Compute final production with best capacities on raw profiles
-    P_optimal = compute_production(solar_raw, wind_raw, best_S, best_W)
+    P_optimal = best_S * solar_raw + best_W * wind_raw
 
     # Add to dataframe (rounded to 2 decimal places)
     overall["SolarScalingFactor"] = np.round(best_S, 2)
