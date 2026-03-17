@@ -119,6 +119,7 @@ def run_optimization():
 
             # Compute production for this (S, W) using raw profiles
             P = S * solar_raw + W * wind_raw
+            print("Testing S={:.1f} MW, W={:.1f} MW...".format(S, W))
 
             # Find baseload that gives ~10% curtailment
             B = find_baseload(P, target_curtailment=0.10)
