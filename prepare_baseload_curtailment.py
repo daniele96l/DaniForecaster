@@ -191,6 +191,13 @@ def run_optimization():
     overall["DailyAvgProd"] = (
         overall.groupby(day_index)["ProdCombined"].transform("mean")
     ).round(2)
+    # Daily error vs baseload as a fraction:
+    #   0.10 -> day is 10% below baseload
+    #  -0.05 -> day is 5% above baseload
+    overall["DailyErrorPct"] = np.round(
+        (overall["DailyAvgProd"] - overall["Baseload_MW"]) / overall["Baseload_MW"],
+        4,
+    )
 
     # Ensure original averaged wind column has at most 2 decimals
     overall[wind_col] = np.round(overall[wind_col].astype(float), 2)
@@ -208,6 +215,7 @@ def run_optimization():
         "ProdCombined",
         "HourlyShortfall",
         "DailyAvgProd",
+        "DailyErrorPct",
     ]
     ordered_cols = [
         c for c in preferred_cols if c in overall.columns
