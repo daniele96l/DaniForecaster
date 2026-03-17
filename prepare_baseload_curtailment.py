@@ -75,10 +75,6 @@ def run_optimization():
 
     overall = pd.read_csv("Overall.csv")
 
-    # Flatness tolerance (relative deviation)
-    # Relaxed so a feasible flat-enough solution is easier to find
-    hourly_t = 0.1  # max hourly deviation from baseload (100%)
-
     # Find column names (case-insensitive)
     cols = {c.lower(): c for c in overall.columns}
     date_col = cols.get("date", overall.columns[0])
@@ -126,13 +122,13 @@ def run_optimization():
             # Find baseload that gives ~10% curtailment
             B = find_baseload(P, target_curtailment=0.10)
 
-            # OLD: min_hourly_production >= 0.9 * B
+            # Daily mean production constraint: daily_avg_production >= 0.7 * B
             daily_avg_production = np.mean(P)
             if B > best_B and daily_avg_production >= 0.7 * B:
                 print(
                     "New best: B={:.2f} MW (S={:.1f} MW, W={:.1f} MW), "
-                    "max_hourly_shortfall={:.3f}".format(
-                        B, S, W, hourly_t
+                    "daily_avg_production={:.2f} MW".format(
+                        B, S, W, daily_avg_production
                     )
                 )
                 best_B = B
@@ -153,24 +149,50 @@ def run_optimization():
     mask = P_optimal > 0
     curtailment_ratio[mask] = curtailment[mask] / P_optimal[mask]
 
-    # Add to dataframe (rounded)
-    overall["SolarScalingFactor"] = np.round(best_S, 2)
-    overall["WindScalingFactor"] = np.round(best_W, 2)
-    overall["Baseload"] = np.round(best_B, 2)
+    # Add to dataframe (rounded) with short, readable names
+    overall["SolarCap_MW"] = np.round(best_S, 2)
+    overall["WindCap_MW"] = np.round(best_W, 2)
+    overall["Baseload_MW"] = np.round(best_B, 2)
     overall["SolarScaled"] = np.round(best_S * solar_raw, 2)
     overall["WindScaled"] = np.round(best_W * wind_raw, 2)
-    overall["ProductionCombined"] = np.round(P_optimal, 2)
+    overall["ProdCombined"] = np.round(P_optimal, 2)
 
-    # Instantaneous error vs promised baseload (fraction of baseload)
+    # Instantaneous error vs baseload (fraction of baseload)
     # > 0 means under-producing vs baseload, < 0 means over-producing
     prod_error = (best_B - P_optimal) / best_B
-    overall["Prod_vs_PromisedBaseload_hourly"] = np.round(prod_error, 4)
+    overall["HourlyShortfall"] = np.round(prod_error, 4)
+
+    # Daily-average production and 70% baseload metric per row
+    day_index = overall[date_col].dt.floor("D")
+    overall["DailyAvgProd"] = (
+        overall.groupby(day_index)["ProdCombined"].transform("mean")
+    ).round(2)
 
     # Ensure original averaged wind column has at most 2 decimals
     overall[wind_col] = np.round(overall[wind_col].astype(float), 2)
 
-    # Save full dataset including curtailment columns
-    overall.to_csv("Overall_with_baseload.csv", index=False)
+    # Order columns for output
+    preferred_cols = [
+        date_col,
+        solar_col,
+        wind_col,
+        "SolarCap_MW",
+        "WindCap_MW",
+        "Baseload_MW",
+        "SolarScaled",
+        "WindScaled",
+        "ProdCombined",
+        "HourlyShortfall",
+        "DailyAvgProd",
+    ]
+    ordered_cols = [
+        c for c in preferred_cols if c in overall.columns
+    ] + [
+        c for c in overall.columns if c not in preferred_cols
+    ]
+
+    # Save formatted dataset
+    overall.to_csv("Overall_with_baseload.csv", index=False, columns=ordered_cols)
 
 
 # ============================================================================
