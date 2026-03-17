@@ -1132,12 +1132,16 @@ function OptimizationPanel() {
             >
               Optimization
             </div>
-            <div style={{ fontSize: 13, maxWidth: 520, lineHeight: 1.4 }}>
-              We scan a grid of solar (S) and wind (W) capacities, compute the
-              resulting hourly production, and for each pair find the baseload B
-              that gives about 10% curtailment (energy above B). We only accept
-              combinations where the average production is at least 70% of B,
-              and among those we pick the one with the highest baseload.
+            <div style={{ fontSize: 13, maxWidth: 620, lineHeight: 1.4 }}>
+              <strong>Question:</strong> Grid search over capacities to maximize baseload at ~10%
+              curtailment.
+              <br />
+              <strong>Why this solves it:</strong> we scan a grid of solar (S) and wind (W)
+              capacities, compute the resulting hourly production, and for each pair find the
+              baseload B that gives about 10% curtailment (energy above B). We only accept
+              combinations where the average production is at least 70% of B, and among those
+              we pick the one with the highest baseload, so the final choice is the largest
+              stable baseload that still respects both the curtailment and adequacy constraints.
             </div>
           </div>
           <button
