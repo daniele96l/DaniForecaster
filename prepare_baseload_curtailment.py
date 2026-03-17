@@ -77,7 +77,7 @@ def run_optimization():
 
     # Flatness tolerance (relative deviation)
     # Relaxed so a feasible flat-enough solution is easier to find
-    hourly_tol = 0.9  # max hourly deviation from baseload (100%)
+    hourly_t = 0.1  # max hourly deviation from baseload (100%)
 
     # Find column names (case-insensitive)
     cols = {c.lower(): c for c in overall.columns}
@@ -128,15 +128,12 @@ def run_optimization():
 
             # Hourly shortfall vs baseload (same logic as Prod_vs_PromisedBaseload)
             # Positive values mean under-production relative to baseload; over-production is not penalized here.
-            hourly_error = (B - P) / B
-            hourly_shortfall = np.maximum(hourly_error, 0.0)
-            max_dev_hourly = float(np.max(hourly_shortfall))
-
-            if B > best_B and max_dev_hourly <= hourly_tol:
+            min_hourly_production = float(np.min(P))
+            if B > best_B and min_hourly_production >= hourly_t * B:
                 print(
                     "New best: B={:.2f} MW (S={:.1f} MW, W={:.1f} MW), "
                     "max_hourly_shortfall={:.3f}".format(
-                        B, S, W, max_dev_hourly
+                        B, S, W, hourly_t
                     )
                 )
                 best_B = B
