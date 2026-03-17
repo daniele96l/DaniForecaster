@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
+import { useOptimization } from "./hooks/useOptimization";
 
 type Dataset = "solar" | "wind" | "wind_raw" | "both";
 
@@ -438,6 +439,7 @@ function filterPoints(
 }
 
 export default function Page() {
+  const [view, setView] = useState<"timeseries" | "optimization">("timeseries");
   const [dataset, setDataset] = useState<Dataset>("solar");
   const [year, setYear] = useState<number | null>(null);
   const [month, setMonth] = useState<number | null>(null);
@@ -611,14 +613,52 @@ export default function Page() {
           gap: 16
         }}
       >
-        <section
+        <div
           style={{
-            flex: 3,
             display: "flex",
-            flexDirection: "column",
-            gap: 12
+            gap: 8,
+            marginBottom: 12,
+            borderBottom: "1px solid rgba(148,163,184,0.35)",
+            paddingBottom: 8
           }}
         >
+          {[
+            { id: "timeseries", label: "Time series" },
+            { id: "optimization", label: "Optimization" }
+          ].map((tab) => {
+            const active = view === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setView(tab.id as typeof view)}
+                style={{
+                  padding: "6px 12px",
+                  borderRadius: 999,
+                  border: "1px solid rgba(148,163,184,0.6)",
+                  background: active ? "#1d4ed8" : "#020617",
+                  color: active ? "#e5e7eb" : "#9ca3af",
+                  fontSize: 12,
+                  textTransform: "uppercase",
+                  letterSpacing: 0.08,
+                  cursor: "pointer"
+                }}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {view === "timeseries" && (
+          <section
+            style={{
+              flex: 3,
+              display: "flex",
+              flexDirection: "column",
+              gap: 12
+            }}
+          >
           <div
             style={{
               display: "flex",
@@ -910,26 +950,379 @@ export default function Page() {
               )}
             </div>
           )}
-        </section>
+          </section>
+        )}
 
-        <section style={{ flex: 2 }}>
-          <DataTable
-            points={
-              dataset === "wind" || dataset === "wind_raw"
-                ? scaledWind
-                : scaledSolar
-            }
-            label={
-              dataset === "both"
-                ? "Solar (scaled sample)"
-                : dataset === "solar"
-                  ? "Solar (scaled)"
-                  : "Wind (scaled)"
-            }
-          />
-        </section>
+        {view === "timeseries" && (
+          <section style={{ flex: 2 }}>
+            <DataTable
+              points={
+                dataset === "wind" || dataset === "wind_raw"
+                  ? scaledWind
+                  : scaledSolar
+              }
+              label={
+                dataset === "both"
+                  ? "Solar (scaled sample)"
+                  : dataset === "solar"
+                    ? "Solar (scaled)"
+                    : "Wind (scaled)"
+              }
+            />
+          </section>
+        )}
+
+        {view === "optimization" && <OptimizationPanel />}
       </main>
     </div>
   );
 }
+
+function OptimizationPanel() {
+  const { status, error, result, runOptimization } = useOptimization();
+
+  const [optMonth, setOptMonth] = useState<number | null>(null);
+  const [optDay, setOptDay] = useState<number | null>(null);
+
+  const best = result
+    ? {
+        s: result.bestS,
+        w: result.bestW,
+        b: result.bestB
+      }
+    : null;
+
+  const monthOptions = useMemo(() => {
+    if (!result) return [] as number[];
+    const set = new Set<number>();
+    for (const p of result.series) {
+      const d = new Date(p.date);
+      set.add(d.getMonth() + 1);
+    }
+    return Array.from(set).sort((a, b) => a - b);
+  }, [result]);
+
+  const dayOptions = useMemo(() => {
+    if (!result) return [] as number[];
+    const set = new Set<number>();
+    for (const p of result.series) {
+      const d = new Date(p.date);
+      if (optMonth != null && d.getMonth() + 1 !== optMonth) continue;
+      set.add(d.getDate());
+    }
+    return Array.from(set).sort((a, b) => a - b);
+  }, [result, optMonth]);
+
+  const focusedSeries = useMemo(() => {
+    if (!result) return [] as typeof result.series;
+    return result.series.filter((p) => {
+      const d = new Date(p.date);
+      if (optMonth != null && d.getMonth() + 1 !== optMonth) return false;
+      if (optDay != null && d.getDate() !== optDay) return false;
+      return true;
+    });
+  }, [result, optMonth, optDay]);
+
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "minmax(0, 2fr) minmax(0, 1fr)",
+        gap: 16,
+        alignItems: "flex-start"
+      }}
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 12
+          }}
+        >
+          <div>
+            <div
+              style={{
+                fontSize: 12,
+                textTransform: "uppercase",
+                letterSpacing: 0.08,
+                color: "#9ca3af"
+              }}
+            >
+              Optimization
+            </div>
+            <div style={{ fontSize: 14 }}>
+              Grid search over capacities to maximize baseload at ~10% curtailment.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => runOptimization({ targetCurtailment: 0.1, stepMw: 10 })}
+            disabled={status === "running"}
+            style={{
+              padding: "8px 14px",
+              borderRadius: 999,
+              border: "none",
+              background:
+                status === "running" ? "rgba(148,163,184,0.5)" : "#22c55e",
+              color: "#020617",
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: status === "running" ? "default" : "pointer"
+            }}
+          >
+            {status === "running" ? "Running…" : "Run optimization"}
+          </button>
+        </div>
+
+        {result && (
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 12,
+              marginTop: 4
+            }}
+          >
+            <label
+              style={{
+                fontSize: 11,
+                textTransform: "uppercase",
+                letterSpacing: 0.08,
+                color: "#9ca3af"
+              }}
+            >
+              Month
+              <select
+                value={optMonth ?? ""}
+                onChange={(e) =>
+                  setOptMonth(e.target.value ? Number(e.target.value) : null)
+                }
+                style={{
+                  marginLeft: 6,
+                  padding: "4px 8px",
+                  borderRadius: 999,
+                  border: "1px solid rgba(148,163,184,0.6)",
+                  background: "#020617",
+                  color: "#e5e7eb",
+                  fontSize: 11
+                }}
+              >
+                <option value="">All</option>
+                {monthOptions.map((m) => (
+                  <option key={m} value={m}>
+                    {m.toString().padStart(2, "0")}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label
+              style={{
+                fontSize: 11,
+                textTransform: "uppercase",
+                letterSpacing: 0.08,
+                color: "#9ca3af"
+              }}
+            >
+              Day
+              <select
+                value={optDay ?? ""}
+                onChange={(e) =>
+                  setOptDay(e.target.value ? Number(e.target.value) : null)
+                }
+                style={{
+                  marginLeft: 6,
+                  padding: "4px 8px",
+                  borderRadius: 999,
+                  border: "1px solid rgba(148,163,184,0.6)",
+                  background: "#020617",
+                  color: "#e5e7eb",
+                  fontSize: 11
+                }}
+              >
+                <option value="">All</option>
+                {dayOptions.map((d) => (
+                  <option key={d} value={d}>
+                    {d.toString().padStart(2, "0")}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        )}
+
+        {status === "running" && (
+          <div
+            style={{
+              borderRadius: 12,
+              padding: "10px 12px",
+              border: "1px solid rgba(148,163,184,0.5)",
+              background:
+                "linear-gradient(135deg, rgba(15,23,42,0.95), rgba(30,64,175,0.45))",
+              fontSize: 13,
+              color: "#e5e7eb"
+            }}
+          >
+            Running grid search over solar and wind capacities… This may take a few
+            seconds.
+          </div>
+        )}
+
+        {error && (
+          <div
+            style={{
+              borderRadius: 12,
+              padding: "10px 12px",
+              border: "1px solid rgba(248,113,113,0.7)",
+              background:
+                "linear-gradient(135deg, rgba(69,10,10,0.95), rgba(127,29,29,0.8))",
+              fontSize: 13,
+              color: "#fecaca"
+            }}
+          >
+            Failed to run optimization: {error}
+          </div>
+        )}
+
+        {best && (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+              gap: 12
+            }}
+          >
+            {[
+              { label: "Solar capacity (MW)", value: best.s.toFixed(1) },
+              { label: "Wind capacity (MW)", value: best.w.toFixed(1) },
+              { label: "Baseload (MW)", value: best.b.toFixed(1) }
+            ].map((item) => (
+              <div
+                key={item.label}
+                style={{
+                  padding: "10px 12px",
+                  borderRadius: 12,
+                  border: "1px solid rgba(148,163,184,0.4)",
+                  background:
+                    "linear-gradient(135deg, rgba(15,23,42,0.9), rgba(56,189,248,0.25))"
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 11,
+                    textTransform: "uppercase",
+                    letterSpacing: 0.08,
+                    color: "#9ca3af"
+                  }}
+                >
+                  {item.label}
+                </div>
+                <div style={{ marginTop: 4, fontSize: 18, fontWeight: 600 }}>
+                  {item.value}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {focusedSeries && focusedSeries.length > 0 && (
+          <div style={{ marginTop: 8 }}>
+            <Chart
+              series={{
+                solar: focusedSeries.map((p) => ({
+                  date: p.date,
+                  value: p.productionCombined
+                })),
+                wind: focusedSeries.map((p) => ({
+                  date: p.date,
+                  value: p.baseload
+                }))
+              }}
+            />
+          </div>
+        )}
+      </div>
+
+      <div
+        style={{
+          borderRadius: 16,
+          border: "1px solid rgba(148,163,184,0.4)",
+          background:
+            "radial-gradient(circle at top, rgba(15,23,42,0.95), rgba(15,23,42,0.98))",
+          padding: 12,
+          fontSize: 12,
+          maxHeight: 420,
+          overflow: "auto"
+        }}
+      >
+        <div
+          style={{
+            fontSize: 11,
+            textTransform: "uppercase",
+            letterSpacing: 0.08,
+            color: "#9ca3af",
+            marginBottom: 6
+          }}
+        >
+          Optimization grid samples
+        </div>
+        {result && result.gridSamples.length ? (
+          <table
+            style={{
+              width: "100%",
+              borderCollapse: "collapse"
+            }}
+          >
+            <thead>
+              <tr>
+                <th
+                  style={{
+                    textAlign: "left",
+                    padding: "4px 6px",
+                    borderBottom: "1px solid rgba(148,163,184,0.5)"
+                  }}
+                >
+                  S (MW)
+                </th>
+                <th
+                  style={{
+                    textAlign: "left",
+                    padding: "4px 6px",
+                    borderBottom: "1px solid rgba(148,163,184,0.5)"
+                  }}
+                >
+                  W (MW)
+                </th>
+                <th
+                  style={{
+                    textAlign: "left",
+                    padding: "4px 6px",
+                    borderBottom: "1px solid rgba(148,163,184,0.5)"
+                  }}
+                >
+                  B (MW)
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {result.gridSamples.slice(0, 80).map((g, idx) => (
+                <tr key={idx}>
+                  <td style={{ padding: "3px 6px" }}>{g.sMw.toFixed(1)}</td>
+                  <td style={{ padding: "3px 6px" }}>{g.wMw.toFixed(1)}</td>
+                  <td style={{ padding: "3px 6px" }}>{g.baseloadMw.toFixed(1)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div style={{ color: "#6b7280" }}>
+            Run the optimization to see grid samples here.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 
