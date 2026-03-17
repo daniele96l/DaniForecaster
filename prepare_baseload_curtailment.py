@@ -4,6 +4,8 @@ Energy Optimization - Simple, Flat Version
 No nested functions, straightforward logic.
 """
 
+from typing import Tuple
+
 import numpy as np
 import pandas as pd
 
@@ -106,7 +108,7 @@ def load_and_prepare_overall(path: str = "Overall.csv"):
 def search_best_capacities(
     solar_raw: np.ndarray,
     wind_raw: np.ndarray,
-) -> tuple[float, float, float]:
+) -> Tuple[float, float, float]:
     """
     Grid-search (S, W) in [0, 200] MW to find the best baseload B,
     enforcing the daily-average >= 0.7 * B constraint.

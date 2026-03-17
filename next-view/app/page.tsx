@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { useOptimization } from "./hooks/useOptimization";
+import { useOptimization, SeriesPoint } from "./hooks/useOptimization";
 
 type Dataset = "solar" | "wind" | "wind_raw" | "both";
 
@@ -1040,14 +1040,37 @@ function OptimizationPanel() {
   }, [result, optMonth]);
 
   const focusedSeries = useMemo(() => {
-    if (!result) return [] as typeof result.series;
-    return result.series.filter((p) => {
+    if (!result) return [] as SeriesPoint[];
+    return result.series.filter((p: SeriesPoint) => {
       const d = new Date(p.date);
       if (optMonth != null && d.getMonth() + 1 !== optMonth) return false;
       if (optDay != null && d.getDate() !== optDay) return false;
       return true;
     });
   }, [result, optMonth, optDay]);
+
+  const dayStats = useMemo(() => {
+    if (!result)
+      return [] as { month: number; day: number; avg: number; errPct: number }[];
+    const byDay = new Map<
+      string,
+      { month: number; day: number; avg: number; errPct: number }
+    >();
+    for (const p of result.series as SeriesPoint[]) {
+      const d = new Date(p.date);
+      const month = d.getMonth() + 1;
+      const day = d.getDate();
+      if (optMonth != null && month !== optMonth) continue;
+      const key = `${month}-${day}`;
+      if (!byDay.has(key)) {
+        const baseload = p.baseload;
+        const avg = p.dailyAvgProd;
+        const errPct = baseload > 0 ? (avg - baseload) / baseload : 0;
+        byDay.set(key, { month, day, avg, errPct });
+      }
+    }
+    return Array.from(byDay.values()).sort((a, b) => a.day - b.day);
+  }, [result, optMonth]);
 
   return (
     <div
@@ -1175,6 +1198,34 @@ function OptimizationPanel() {
                 ))}
               </select>
             </label>
+            {dayStats.length > 0 && (
+              <div
+                style={{
+                  fontSize: 11,
+                  color: "#9ca3af",
+                  maxHeight: 80,
+                  overflow: "auto",
+                  paddingLeft: 4,
+                  borderLeft: "1px solid rgba(148,163,184,0.4)"
+                }}
+              >
+                <div
+                  style={{
+                    textTransform: "uppercase",
+                    letterSpacing: 0.08,
+                    marginBottom: 2
+                  }}
+                >
+                  Day stats (current month)
+                </div>
+                {dayStats.map((s) => (
+                  <div key={`${s.month}-${s.day}`}>
+                    {s.day.toString().padStart(2, "0")}:{" "}
+                    {s.avg.toFixed(1)} MW, {(s.errPct * 100).toFixed(1)}%
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -1342,86 +1393,9 @@ function OptimizationPanel() {
           </>
         )}
       </div>
-
-      <div
-        style={{
-          borderRadius: 16,
-          border: "1px solid rgba(148,163,184,0.4)",
-          background:
-            "radial-gradient(circle at top, rgba(15,23,42,0.95), rgba(15,23,42,0.98))",
-          padding: 12,
-          fontSize: 12,
-          maxHeight: 420,
-          overflow: "auto"
-        }}
-      >
-        <div
-          style={{
-            fontSize: 11,
-            textTransform: "uppercase",
-            letterSpacing: 0.08,
-            color: "#9ca3af",
-            marginBottom: 6
-          }}
-        >
-          Optimization grid samples
-        </div>
-        {result && result.gridSamples.length ? (
-          <table
-            style={{
-              width: "100%",
-              borderCollapse: "collapse"
-            }}
-          >
-            <thead>
-              <tr>
-                <th
-                  style={{
-                    textAlign: "left",
-                    padding: "4px 6px",
-                    borderBottom: "1px solid rgba(148,163,184,0.5)"
-                  }}
-                >
-                  S (MW)
-                </th>
-                <th
-                  style={{
-                    textAlign: "left",
-                    padding: "4px 6px",
-                    borderBottom: "1px solid rgba(148,163,184,0.5)"
-                  }}
-                >
-                  W (MW)
-                </th>
-                <th
-                  style={{
-                    textAlign: "left",
-                    padding: "4px 6px",
-                    borderBottom: "1px solid rgba(148,163,184,0.5)"
-                  }}
-                >
-                  B (MW)
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {result.gridSamples.slice(0, 80).map((g, idx) => (
-                <tr key={idx}>
-                  <td style={{ padding: "3px 6px" }}>{g.sMw.toFixed(1)}</td>
-                  <td style={{ padding: "3px 6px" }}>{g.wMw.toFixed(1)}</td>
-                  <td style={{ padding: "3px 6px" }}>{g.baseloadMw.toFixed(1)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        ) : (
-          <div style={{ color: "#6b7280" }}>
-            Run the optimization to see grid samples here.
-          </div>
-        )}
-      </div>
     </div>
   );
 }
+
 
 

@@ -5,13 +5,15 @@ type OptimizationParams = {
   stepMw?: number;
 };
 
-type GridSample = {
+export type GridSample = {
   sMw: number;
   wMw: number;
   baseloadMw: number;
+  dailyAvgProductionMw?: number;
+  dailyErrorPct?: number;
 };
 
-type SeriesPoint = {
+export type SeriesPoint = {
   date: string;
   solarScaled: number;
   windScaled: number;
@@ -19,6 +21,8 @@ type SeriesPoint = {
   baseload: number;
   curtailment: number;
   curtailmentRatio: number;
+  hourlyShortfall: number;
+  dailyAvgProd: number;
 };
 
 type OptimizationResult = {

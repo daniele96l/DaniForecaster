@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import path from "path";
 import { promises as fs } from "fs";
+import { execFile } from "child_process";
+import { promisify } from "util";
+
+const execFileAsync = promisify(execFile);
 
 type OptimizationParams = {
   targetCurtailment?: number;
@@ -11,6 +15,8 @@ type GridSample = {
   sMw: number;
   wMw: number;
   baseloadMw: number;
+  dailyAvgProductionMw?: number;
+  dailyErrorPct?: number;
 };
 
 type SeriesPoint = {
@@ -54,10 +60,10 @@ function splitCsvLine(line: string): string[] {
   return out.map((s) => s.trim());
 }
 
-function parseOverallCsv(text: string) {
+function parseOverallWithBaseloadCsv(text: string) {
   const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
   if (lines.length < 2) {
-    throw new Error("Overall.csv is empty or missing rows");
+    throw new Error("Overall_with_baseload.csv is empty or missing rows");
   }
   const header = splitCsvLine(lines[0]);
   const cols: Record<string, number> = {};
@@ -66,200 +72,110 @@ function parseOverallCsv(text: string) {
   });
 
   const dateIdx = cols["date"] ?? 0;
-  const solarIdx = cols["solar production, kwh"];
-  const windIdx = cols["wind production, kwh (avg)"];
+  const solarCapIdx = cols["solarcap_mw"];
+  const windCapIdx = cols["windcap_mw"];
+  const baseloadIdx = cols["baseload_mw"];
+  const solarScaledIdx = cols["solarscaled"];
+  const windScaledIdx = cols["windscaled"];
+  const prodCombinedIdx = cols["prodcombined"];
+  const hourlyShortfallIdx = cols["hourlyshortfall"];
+  const dailyAvgProdIdx = cols["dailyavgprod"];
 
-  if (solarIdx == null || windIdx == null) {
+  if (
+    solarCapIdx == null ||
+    windCapIdx == null ||
+    baseloadIdx == null ||
+    solarScaledIdx == null ||
+    windScaledIdx == null ||
+    prodCombinedIdx == null ||
+    hourlyShortfallIdx == null ||
+    dailyAvgProdIdx == null
+  ) {
     throw new Error(
-      `Cannot find required columns in Overall.csv. Have: ${header.join(", ")}`
+      `Cannot find required columns in Overall_with_baseload.csv. Have: ${header.join(", ")}`
     );
   }
 
-  const dates: Date[] = [];
-  const solar: number[] = [];
-  const wind: number[] = [];
+  const series: SeriesPoint[] = [];
+  let bestS = 0;
+  let bestW = 0;
+  let bestB = 0;
 
   for (let i = 1; i < lines.length; i++) {
     const raw = lines[i];
     const parts = splitCsvLine(raw);
-    if (parts.length <= Math.max(dateIdx, solarIdx, windIdx)) continue;
+    if (parts.length <= Math.max(dateIdx, prodCombinedIdx, baseloadIdx))
+      continue;
     const dateStr = parts[dateIdx];
-    const solarStr = parts[solarIdx];
-    const windStr = parts[windIdx];
     const d = new Date(dateStr);
     if (Number.isNaN(d.getTime())) continue;
-    const s = Number(solarStr);
-    const w = Number(windStr);
-    if (!Number.isFinite(s) || !Number.isFinite(w)) continue;
-    dates.push(d);
-    solar.push(s);
-    wind.push(w);
-  }
 
-  if (!dates.length) {
-    throw new Error("No valid rows parsed from Overall.csv");
-  }
+    const solarCap = Number(parts[solarCapIdx]);
+    const windCap = Number(parts[windCapIdx]);
+    const baseload = Number(parts[baseloadIdx]);
+    const solarScaled = Number(parts[solarScaledIdx]);
+    const windScaled = Number(parts[windScaledIdx]);
+    const productionCombined = Number(parts[prodCombinedIdx]);
+    const hourlyShortfall = Number(parts[hourlyShortfallIdx]);
+    const dailyAvgProd = Number(parts[dailyAvgProdIdx]);
 
-  return { dates, solar, wind };
-}
-
-function computeCurtailmentRatio(
-  production: number[],
-  baseload: number
-): number {
-  let curtailed = 0;
-  let total = 0;
-  for (let i = 0; i < production.length; i++) {
-    const p = production[i];
-    total += p;
-    if (p > baseload) curtailed += p - baseload;
-  }
-  if (total <= 0) return 0;
-  return curtailed / total;
-}
-
-function findBaseload(
-  production: number[],
-  targetCurtailment = 0.1
-): number {
-  if (!production.length) return 0;
-  let maxP = 0;
-  for (const p of production) if (p > maxP) maxP = p;
-  if (maxP <= 0) return 0;
-
-  let lo = 0;
-  let hi = maxP;
-
-  for (let i = 0; i < 100; i++) {
-    const mid = 0.5 * (lo + hi);
-    const ratio = computeCurtailmentRatio(production, mid);
-    if (ratio > targetCurtailment) {
-      lo = mid;
-    } else {
-      hi = mid;
+    if (i === 1) {
+      bestS = solarCap;
+      bestW = windCap;
+      bestB = baseload;
     }
-    if (hi - lo < 1e-6) break;
+
+    const curtailment = Math.max(productionCombined - baseload, 0);
+    const curtailmentRatio =
+      productionCombined > 0 ? curtailment / productionCombined : 0;
+
+    series.push({
+      date: d.toISOString(),
+      solarScaled: Number(solarScaled.toFixed(2)),
+      windScaled: Number(windScaled.toFixed(2)),
+      productionCombined: Number(productionCombined.toFixed(2)),
+      baseload: Number(baseload.toFixed(2)),
+      curtailment: Number(curtailment.toFixed(2)),
+      curtailmentRatio: Number(curtailmentRatio.toFixed(4)),
+      hourlyShortfall: Number(hourlyShortfall.toFixed(4)),
+      dailyAvgProd: Number(dailyAvgProd.toFixed(2))
+    });
   }
 
-  return 0.5 * (lo + hi);
+  if (!series.length) {
+    throw new Error("No valid rows parsed from Overall_with_baseload.csv");
+  }
+
+  return { bestS, bestW, bestB, series };
 }
 
 export async function POST(request: Request) {
   try {
-    const body = (await request.json().catch(() => ({}))) as OptimizationParams;
-    const targetCurtailment =
-      typeof body.targetCurtailment === "number"
-        ? body.targetCurtailment
-        : 0.1;
-    const stepMw =
-      typeof body.stepMw === "number" && body.stepMw > 0 ? body.stepMw : 10;
-
     const root = process.cwd();
-    const overallPath = path.join(root, "..", "Overall.csv");
-    const text = await fs.readFile(overallPath, "utf8");
-    const { dates, solar, wind } = parseOverallCsv(text);
+    const projectRoot = path.join(root, "..");
+    const scriptPath = path.join(
+      projectRoot,
+      "prepare_baseload_curtailment.py"
+    );
 
-    if (!solar.length || !wind.length || solar.length !== wind.length) {
-      throw new Error("Solar and wind arrays are empty or mismatched");
-    }
+    await execFileAsync("python3", [scriptPath], { cwd: projectRoot }).catch(
+      () => execFileAsync("python", [scriptPath], { cwd: projectRoot })
+    );
 
-    const maxCapacity = 200;
-    const S_values: number[] = [];
-    const W_values: number[] = [];
-    for (let s = 0; s <= maxCapacity; s += stepMw) S_values.push(s);
-    for (let w = 0; w <= maxCapacity; w += stepMw) W_values.push(w);
+    const outPath = path.join(projectRoot, "Overall_with_baseload.csv");
+    const text = await fs.readFile(outPath, "utf8");
+    const { bestS, bestW, bestB, series } = parseOverallWithBaseloadCsv(text);
 
-    let bestB = -Infinity;
-    let bestS = 0;
-    let bestW = 0;
-
-    const gridSamples: GridSample[] = [];
-    let counter = 0;
-
-    for (const S of S_values) {
-      for (const W of W_values) {
-        if (S === 0 && W === 0) continue;
-        const P = new Array<number>(solar.length);
-        for (let i = 0; i < solar.length; i++) {
-          P[i] = S * solar[i] + W * wind[i];
-        }
-        const B = findBaseload(P, targetCurtailment);
-        // Daily mean production constraint: daily_avg_production >= 0.7 * B
-        let sumP = 0;
-        for (let i = 0; i < P.length; i++) sumP += P[i];
-        const dailyAvgProduction = sumP / P.length;
-
-        if (B > bestB && dailyAvgProduction >= 0.7 * B) {
-          bestB = B;
-          bestS = S;
-          bestW = W;
-        }
-        if (counter % 10 === 0) {
-          gridSamples.push({ sMw: S, wMw: W, baseloadMw: B });
-        }
-        counter++;
+    const firstDailyAvg = series[0]?.dailyAvgProd ?? 0;
+    const gridSamples: GridSample[] = [
+      {
+        sMw: bestS,
+        wMw: bestW,
+        baseloadMw: bestB,
+        dailyAvgProductionMw: firstDailyAvg,
+        dailyErrorPct: bestB > 0 ? (firstDailyAvg - bestB) / bestB : 0
       }
-    }
-
-    if (!Number.isFinite(bestB) || bestB <= 0) {
-      throw new Error("Could not find valid baseload solution");
-    }
-
-    const series: SeriesPoint[] = [];
-    const daySums = new Map<string, { sum: number; count: number }>();
-
-    // First pass: compute scaled production and per-day aggregates
-    const solarScaledArr: number[] = [];
-    const windScaledArr: number[] = [];
-    const prodArr: number[] = [];
-    const curtArr: number[] = [];
-    const ratioArr: number[] = [];
-    const shortfallArr: number[] = [];
-
-    for (let i = 0; i < solar.length; i++) {
-      const solarScaled = bestS * solar[i];
-      const windScaled = bestW * wind[i];
-      const productionCombined = solarScaled + windScaled;
-      const baseload = bestB;
-      const curtailment = Math.max(productionCombined - baseload, 0);
-      const ratio =
-        productionCombined > 0 ? curtailment / productionCombined : 0;
-      const hourlyShortfall =
-        baseload > 0 ? (baseload - productionCombined) / baseload : 0;
-
-      solarScaledArr[i] = solarScaled;
-      windScaledArr[i] = windScaled;
-      prodArr[i] = productionCombined;
-      curtArr[i] = curtailment;
-      ratioArr[i] = ratio;
-      shortfallArr[i] = hourlyShortfall;
-
-      const dayKey = dates[i].toISOString().slice(0, 10);
-      const agg = daySums.get(dayKey) ?? { sum: 0, count: 0 };
-      agg.sum += productionCombined;
-      agg.count += 1;
-      daySums.set(dayKey, agg);
-    }
-
-    // Second pass: build series with DailyAvgProd
-    for (let i = 0; i < solar.length; i++) {
-      const baseload = bestB;
-      const dayKey = dates[i].toISOString().slice(0, 10);
-      const agg = daySums.get(dayKey)!;
-      const dailyAvgProd = agg.sum / agg.count;
-
-      series.push({
-        date: dates[i].toISOString(),
-        solarScaled: Number(solarScaledArr[i].toFixed(2)),
-        windScaled: Number(windScaledArr[i].toFixed(2)),
-        productionCombined: Number(prodArr[i].toFixed(2)),
-        baseload: Number(baseload.toFixed(2)),
-        curtailment: Number(curtArr[i].toFixed(2)),
-        curtailmentRatio: Number(ratioArr[i].toFixed(4)),
-        hourlyShortfall: Number(shortfallArr[i].toFixed(4)),
-        dailyAvgProd: Number(dailyAvgProd.toFixed(2))
-      });
-    }
+    ];
 
     const result: OptimizationResult = {
       bestS,
