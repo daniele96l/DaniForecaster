@@ -151,7 +151,6 @@ def run_optimization():
     best_B = -np.inf
     best_S = 0.0
     best_W = 0.0
-    best_curtailment = np.inf
 
     # Loop over all (S, W) pairs
     for i, S in enumerate(S_values):
