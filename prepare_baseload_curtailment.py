@@ -136,27 +136,28 @@ def run_optimization():
     # Compute final production with best capacities on raw profiles
     P_optimal = best_S * solar_raw + best_W * wind_raw
 
-    # Add to dataframe (rounded to 2 decimal places)
+    # Per-hour curtailment relative to baseload
+    curtailment = np.maximum(P_optimal - best_B, 0.0)
+    curtailment_ratio = np.zeros_like(P_optimal, dtype=float)
+    mask = P_optimal > 0
+    curtailment_ratio[mask] = curtailment[mask] / P_optimal[mask]
+
+    # Add to dataframe (rounded)
     overall["SolarScalingFactor"] = np.round(best_S, 2)
     overall["WindScalingFactor"] = np.round(best_W, 2)
+    overall["Baseload"] = np.round(best_B, 2)
     overall["PromisedBaseload"] = np.round(best_B, 2)
     overall["SolarScaled"] = np.round(best_S * solar_raw, 2)
     overall["WindScaled"] = np.round(best_W * wind_raw, 2)
     overall["ProductionCombined"] = np.round(P_optimal, 2)
+    overall["Curtailment"] = np.round(curtailment, 2)
+    overall["CurtailmentRatio"] = np.round(curtailment_ratio, 4)
 
     # Ensure original averaged wind column has at most 2 decimals
     overall[wind_col] = np.round(overall[wind_col].astype(float), 2)
 
-    # Save without per-hour curtailment columns
-    overall.to_csv(
-        "Overall_with_baseload.csv",
-        index=False,
-        columns=[
-            col
-            for col in overall.columns
-            if col not in ("Curtailment", "CurtailmentRatio", "Baseload")
-        ],
-    )
+    # Save full dataset including curtailment columns
+    overall.to_csv("Overall_with_baseload.csv", index=False)
 
 
 # ============================================================================
