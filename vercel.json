@@ -1,0 +1,6 @@
+{
+  "installCommand": "cd next-view && npm install",
+  "buildCommand": "cd next-view && npm run build",
+  "devCommand": "cd next-view && npm run dev"
+}
+

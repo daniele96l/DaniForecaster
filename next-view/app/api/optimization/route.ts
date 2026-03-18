@@ -1,10 +1,7 @@
 import { NextResponse } from "next/server";
 import path from "path";
 import { promises as fs } from "fs";
-import { execFile } from "child_process";
-import { promisify } from "util";
-
-const execFileAsync = promisify(execFile);
+import { fileURLToPath } from "url";
 
 type OptimizationParams = {
   targetCurtailment?: number;
@@ -194,24 +191,16 @@ function parseGridSearchLogCsv(text: string): GridSample[] {
 
 export async function POST(request: Request) {
   try {
-    const root = process.cwd();
-    const projectRoot = path.join(root, "..");
-    const scriptPath = path.join(
-      projectRoot,
-      "prepare_baseload_curtailment.py"
-    );
+    const hereDir = path.dirname(fileURLToPath(import.meta.url)); // next-view/app/api/optimization
+    const repoRoot = path.resolve(hereDir, "../../../../"); // repo root
 
-    await execFileAsync("python3", [scriptPath], { cwd: projectRoot }).catch(
-      () => execFileAsync("python", [scriptPath], { cwd: projectRoot })
-    );
-
-    const outPath = path.join(projectRoot, "Overall_with_baseload.csv");
+    const outPath = path.join(repoRoot, "Overall_with_baseload.csv");
     const text = await fs.readFile(outPath, "utf8");
     const { bestS, bestW, bestB, series } = parseOverallWithBaseloadCsv(text);
 
     let gridSamples: GridSample[] = [];
     try {
-      const logPath = path.join(projectRoot, "grid_search_log.csv");
+      const logPath = path.join(repoRoot, "grid_search_log.csv");
       const logText = await fs.readFile(logPath, "utf8");
       gridSamples = parseGridSearchLogCsv(logText);
     } catch {

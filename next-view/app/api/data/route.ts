@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import path from "path";
 import { promises as fs } from "fs";
+import { fileURLToPath } from "url";
 
 type Point = { date: string; value: number };
 
@@ -96,20 +97,21 @@ export async function GET(request: Request) {
   const year = yearParam ? Number(yearParam) : undefined;
 
   try {
-    const root = process.cwd();
+    const hereDir = path.dirname(fileURLToPath(import.meta.url)); // next-view/app/api/data
+    const repoRoot = path.resolve(hereDir, "../../../../"); // repo root
     let csvPath: string;
     let allPoints: Point[];
 
     if (dataset === "solar") {
-      csvPath = path.join(root, "..", "Solar.CSV");
+      csvPath = path.join(repoRoot, "Solar.CSV");
       const text = await fs.readFile(csvPath, "utf8");
       allPoints = parseSolarCsv(text);
     } else if (dataset === "wind") {
-      csvPath = path.join(root, "..", "Wind.csv");
+      csvPath = path.join(repoRoot, "Wind.csv");
       const text = await fs.readFile(csvPath, "utf8");
       allPoints = parseWindCsv(text);
     } else {
-      csvPath = path.join(root, "..", "Wind_raw.csv");
+      csvPath = path.join(repoRoot, "Wind_raw.csv");
       const text = await fs.readFile(csvPath, "utf8");
       allPoints = parseWindRawCsv(text);
     }
