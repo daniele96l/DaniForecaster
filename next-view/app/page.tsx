@@ -55,6 +55,8 @@ function Chart({
   const minY  = all.length ? Math.min(...all) : 0;
   const maxY  = all.length ? Math.max(...all) : 1;
   const spanY = maxY - minY || 1;
+  const avgSolar = sp.length ? sp.reduce((a,p)=>a+p.value,0) / sp.length : null;
+  const avgWind  = wp.length ? wp.reduce((a,p)=>a+p.value,0) / wp.length : null;
   const W=900, H=260, P=44;
   const xS = (i:number,n:number) => P + ((W-P*2)*i)/Math.max(1,n-1);
   const yS = (v:number) => H-P - ((H-P*2)*(v-minY))/spanY;
@@ -95,6 +97,23 @@ function Chart({
             <text x={P-6} y={t.y+4} textAnchor="end" fill="#4b5b7a" fontSize={9} fontFamily="'JetBrains Mono',monospace">{t.v.toFixed(1)}</text>
           </g>
         ))}
+        {/* Average lines */}
+        {avgSolar != null && (
+          <g>
+            <line x1={P} x2={W-P} y1={yS(avgSolar)} y2={yS(avgSolar)} stroke="#22d3a5" strokeWidth={1.2} strokeDasharray="3 7" opacity={0.75}/>
+            <text x={W-P-4} y={yS(avgSolar)-4} textAnchor="end" fill="#22d3a5" fontSize={9} fontFamily="'JetBrains Mono',monospace">
+              Avg Solar: {avgSolar.toFixed(2)}
+            </text>
+          </g>
+        )}
+        {avgWind != null && (
+          <g>
+            <line x1={P} x2={W-P} y1={yS(avgWind)} y2={yS(avgWind)} stroke="#60a5fa" strokeWidth={1.2} strokeDasharray="3 7" opacity={0.75}/>
+            <text x={W-P-4} y={yS(avgWind)+12} textAnchor="end" fill="#60a5fa" fontSize={9} fontFamily="'JetBrains Mono',monospace">
+              Avg Wind: {avgWind.toFixed(2)}
+            </text>
+          </g>
+        )}
         {renderLine("solar",sp,"#22d3a5","fSolar")}
         {renderLine("wind", wp,"#60a5fa","fWind")}
         {hover&&hovered&&(()=>{
@@ -137,6 +156,8 @@ function DualZoneChart({
   showBattery?: boolean;
 }) {
   const [hover, setHover] = useState<number|null>(null);
+  const svgRef = React.useRef<SVGSVGElement|null>(null);
+  const lastHoverRef = React.useRef<number|null>(null);
   const parsed = useMemo(()=>series.map(p=>({
     date:new Date(p.date),
     prod:p.production,
@@ -217,7 +238,32 @@ function DualZoneChart({
         )}
       </div>
 
-      <svg viewBox={`0 0 ${W} ${H}`} className="chart-svg" style={{maxWidth:"100%"}}>
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${W} ${H}`}
+        className="chart-svg"
+        style={{maxWidth:"100%"}}
+        onMouseMove={(e)=>{
+          const n = parsed.length;
+          if (n <= 1) return;
+          const el = svgRef.current;
+          if (!el) return;
+          const r = el.getBoundingClientRect();
+          if (r.width <= 0) return;
+          const x = (e.clientX - r.left) / r.width * W;
+          const t = (x - P) / Math.max(1, (W - P*2));
+          const idx = Math.round(t * (n - 1));
+          const clamped = Math.min(n-1, Math.max(0, idx));
+          if (lastHoverRef.current !== clamped) {
+            lastHoverRef.current = clamped;
+            setHover(clamped);
+          }
+        }}
+        onMouseLeave={()=>{
+          lastHoverRef.current = null;
+          setHover(null);
+        }}
+      >
         <defs>
           <linearGradient id="curtGrad" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="#fb923c" stopOpacity=".7"/>
@@ -262,11 +308,11 @@ function DualZoneChart({
         {/* Production line (drawn on top for clarity) */}
         <path d={prodD} fill="none" stroke="#22d3a5" strokeWidth={2.6} strokeLinejoin="round" strokeLinecap="round" filter="url(#glow2)"/>
 
-        {/* Hover targets + optional battery flow markers + production dots */}
+        {/* Production dots + optional battery flow markers */}
         {parsed.map((p,i)=>(
           <g key={i}>
-            <rect x={xS(i)-4} y={P} width={8} height={H-2*P} fill="transparent"
-              onMouseEnter={()=>setHover(i)} onMouseLeave={()=>setHover(null)}/>
+            {/* Wide invisible strip so mouse interactions remain forgiving */}
+            <rect x={xS(i)-11} y={P} width={22} height={H-2*P} fill="rgba(255,255,255,0)" pointerEvents="all"/>
             {/* Small dot on production so it's visible even when it coincides with baseload */}
             <circle
               cx={xS(i)}
@@ -316,20 +362,57 @@ function DualZoneChart({
         {/* Hover tooltip */}
         {hover!==null&&hp&&(()=>{
           const cx = xS(hover), prodY = yS(hp.prod), baseY = yS(hp.base);
-          const excess   = hp.prod - hp.base;
-          const isCurt   = excess > 0;
-          const tW=220, tH=76;
-          const tx = Math.min(Math.max(cx+14,P),W-P-tW), ty=Math.max(Math.min(prodY,baseY)-tH-8,P);
+          const excess = hp.prod - hp.base;
+          const isCurt = excess > 0;
+          const isCharging = showBattery && hp.charge > 0;
+          const isDischarging = showBattery && hp.discharge > 0;
+
+          const effectiveProd = hp.prod + hp.discharge - hp.charge;
+          const residualDeficit = Math.max(hp.base - effectiveProd, 0);
+
+          const tW = 240;
+          const tH = showBattery ? 106 : 76;
+          const tx = Math.min(Math.max(cx+14,P),W-P-tW);
+          const ty = Math.max(Math.min(prodY,baseY)-tH-8,P);
+
           return (<>
             <line x1={cx} x2={cx} y1={P} y2={H-P} stroke="rgba(255,255,255,.2)" strokeDasharray="4 4"/>
             <circle cx={cx} cy={prodY} r={4.5} fill="#22d3a5" stroke="#eef2ff" strokeWidth={1.5}/>
             <circle cx={cx} cy={baseY} r={3.5} fill="#818cf8" stroke="#eef2ff" strokeWidth={1}/>
+
             <rect x={tx} y={ty} width={tW} height={tH} rx={9} fill="rgba(6,9,22,.97)" stroke="rgba(99,135,220,.5)" strokeWidth={1}/>
-            <text x={tx+10} y={ty+17} fill="#94a3b8" fontSize={9.5} fontFamily="'JetBrains Mono',monospace">{hp.date.toLocaleString(undefined,{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"})}</text>
-            <text x={tx+10} y={ty+33} fill="#22d3a5" fontSize={10} fontFamily="'JetBrains Mono',monospace">Prod: {hp.prod.toFixed(2)} MW  Base: {hp.base.toFixed(2)} MW</text>
-            <text x={tx+10} y={ty+52} fill={isCurt?"#fb923c":"#f87171"} fontSize={10} fontWeight="700" fontFamily="'JetBrains Mono',monospace">
-              {isCurt?`▲ Curtailment: +${excess.toFixed(2)} MW`:`▼ Shortfall: ${excess.toFixed(2)} MW`}
+            <text x={tx+10} y={ty+17} fill="#94a3b8" fontSize={9.5} fontFamily="'JetBrains Mono',monospace">
+              {hp.date.toLocaleString(undefined,{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"})}
             </text>
+            <text x={tx+10} y={ty+33} fill="#22d3a5" fontSize={10} fontFamily="'JetBrains Mono',monospace">
+              Prod: {hp.prod.toFixed(2)} MW  Base: {hp.base.toFixed(2)} MW
+            </text>
+
+            <text
+              x={tx+10}
+              y={ty+52}
+              fill={isCurt?"#fb923c":"#f87171"}
+              fontSize={10}
+              fontWeight="700"
+              fontFamily="'JetBrains Mono',monospace"
+            >
+              {isCurt?`▲ Curtailment: +${excess.toFixed(2)} MW`:`▼ Shortfall: ${Math.abs(excess).toFixed(2)} MW`}
+            </text>
+
+            {showBattery && (
+              <>
+                <text x={tx+10} y={ty+70} fill={isCharging?"#22c55e":"#facc15"} fontSize={10} fontFamily="'JetBrains Mono',monospace">
+                  {isCharging
+                    ? `↑ Battery charge: +${hp.charge.toFixed(2)} MW`
+                    : isDischarging
+                      ? `↓ Battery discharge: +${hp.discharge.toFixed(2)} MW`
+                      : `Battery idle`}
+                </text>
+                <text x={tx+10} y={ty+88} fill="#94a3b8" fontSize={9.5} fontFamily="'JetBrains Mono',monospace">
+                  EffectiveProd: {effectiveProd.toFixed(2)} MW  Residual deficit: {residualDeficit.toFixed(2)} MW
+                </text>
+              </>
+            )}
           </>);
         })()}
       </svg>
@@ -536,6 +619,8 @@ export default function Page() {
   const [solarScale, setSolar]  = useState(1);
   const [windScale,  setWind]   = useState(1);
 
+  const didInitTimeFocus = React.useRef(false);
+
   const solarRes   = useTimeSeries("solar", null);
   const windRes    = useTimeSeries("wind",  null);
   const windRawRes = useTimeSeries("wind_raw", year);
@@ -575,6 +660,40 @@ export default function Page() {
 
   useEffect(()=>{if(month!=null&&!monthOptions.includes(month))setMonth(null);},[month,monthOptions]);
   useEffect(()=>{if(day!=null&&!dayOptions.includes(day))setDay(null);},[day,dayOptions]);
+
+  useEffect(()=>{
+    if (view !== "timeseries") return;
+    if (didInitTimeFocus.current) return;
+    if (monthOptions.length === 0) return;
+
+    // If wind_raw is selected, wait for a year selection first.
+    if (dataset === "wind_raw" && year == null) return;
+
+    const targetMonth = 3; // March
+    const targetDay = 26;
+    if (!monthOptions.includes(targetMonth)) return;
+    const daySet = new Set<number>();
+
+    const addDaysFromPoints = (points: Point[], yearFilter?: number|null) => {
+      for (const p of points) {
+        const d = new Date(p.date);
+        if (yearFilter != null && d.getFullYear() !== yearFilter) continue;
+        if (d.getMonth()+1 !== targetMonth) continue;
+        daySet.add(d.getDate());
+      }
+    };
+
+    if (dataset === "solar" || dataset === "both") addDaysFromPoints(solarData?.points ?? []);
+    if (dataset === "wind"  || dataset === "both") addDaysFromPoints(windData?.points ?? []);
+    if (dataset === "wind_raw") addDaysFromPoints(windRawData?.points ?? [], year);
+
+    const daysInMonth = Array.from(daySet).sort((a,b)=>a-b);
+    if (daysInMonth.length === 0) return;
+
+    didInitTimeFocus.current = true;
+    setMonth(targetMonth);
+    setDay(daysInMonth.includes(targetDay) ? targetDay : daysInMonth[0]);
+  },[view, dataset, year, monthOptions, solarData, windData, windRawData]);
 
   const ptCount=dataset==="both"?`${parsedSolar.length.toLocaleString()} solar + ${parsedWind.length.toLocaleString()} wind`:`${(dataset==="solar"?parsedSolar:parsedWind).length.toLocaleString()} pts`;
 
@@ -681,6 +800,7 @@ function OptimizationPanel() {
   const [optMonth, setOptMonth] = useState<number|null>(null);
   const [optDay,   setOptDay]   = useState<number|null>(null);
   const [showLog,  setShowLog]  = useState(false);
+  const didInitFocus = React.useRef(false);
 
   const best = result?{s:result.bestS,w:result.bestW,b:result.bestB}:null;
 
@@ -697,6 +817,28 @@ function OptimizationPanel() {
     for(const p of result.series){const d=new Date(p.date);if(optMonth!=null&&d.getMonth()+1!==optMonth)continue;set.add(d.getDate());}
     return Array.from(set).sort((a,b)=>a-b);
   },[result,optMonth]);
+
+  useEffect(()=>{
+    if (!result) return;
+    if (didInitFocus.current) return;
+    if (monthOptions.length === 0) return;
+
+    const targetMonth = 3; // March
+    const targetDay = 26;
+    if (!monthOptions.includes(targetMonth)) return;
+    const daysInMonth = Array.from(new Set(
+      result.series
+        .map((p)=>new Date(p.date))
+        .filter(d=>d.getMonth()+1===targetMonth)
+        .map(d=>d.getDate())
+    )).sort((a,b)=>a-b);
+
+    if (daysInMonth.length === 0) return;
+
+    didInitFocus.current = true;
+    setOptMonth(targetMonth);
+    setOptDay(daysInMonth.includes(targetDay) ? targetDay : daysInMonth[0]);
+  },[result, monthOptions]);
 
   const focusedSeries = useMemo(()=>{
     if (!result) return [] as SeriesPoint[];
@@ -879,6 +1021,7 @@ function BatteryOptimizationPanel() {
   const { status, error, result, runOptimization } = useOptimization();
   const [optMonth, setOptMonth] = useState<number|null>(null);
   const [optDay,   setOptDay]   = useState<number|null>(null);
+  const didInitFocus = React.useRef(false);
 
   const best = result?{s:result.bestS,w:result.bestW,b:result.bestB}:null;
 
@@ -895,6 +1038,28 @@ function BatteryOptimizationPanel() {
     for(const p of result.series){const d=new Date(p.date);if(optMonth!=null&&d.getMonth()+1!==optMonth)continue;set.add(d.getDate());}
     return Array.from(set).sort((a,b)=>a-b);
   },[result,optMonth]);
+
+  useEffect(()=>{
+    if (!result) return;
+    if (didInitFocus.current) return;
+    if (monthOptions.length === 0) return;
+
+    const targetMonth = 3; // March
+    const targetDay = 26;
+    if (!monthOptions.includes(targetMonth)) return;
+    const daysInMonth = Array.from(new Set(
+      result.series
+        .map((p)=>new Date(p.date))
+        .filter(d=>d.getMonth()+1===targetMonth)
+        .map(d=>d.getDate())
+    )).sort((a,b)=>a-b);
+
+    if (daysInMonth.length === 0) return;
+
+    didInitFocus.current = true;
+    setOptMonth(targetMonth);
+    setOptDay(daysInMonth.includes(targetDay) ? targetDay : daysInMonth[0]);
+  },[result, monthOptions]);
 
   const batterySeries = useMemo(()=>{
     if (!result) return [];
