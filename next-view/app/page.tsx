@@ -631,12 +631,12 @@ function simulateIdealBattery(series: SeriesPoint[]) {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 export default function Page() {
   const [view, setView]         = useState<"timeseries"|"optimization"|"battery">("timeseries");
-  const [dataset, setDataset]   = useState<Dataset>("solar");
+  const [dataset, setDataset]   = useState<Dataset>("both");
   const [year, setYear]         = useState<number|null>(null);
-  const [month, setMonth]       = useState<number|null>(null);
-  const [day, setDay]           = useState<number|null>(null);
-  const [solarScale, setSolar]  = useState(1);
-  const [windScale,  setWind]   = useState(1);
+  const [month, setMonth]       = useState<number|null>(3);
+  const [day, setDay]           = useState<number|null>(26);
+  const [solarScale, setSolar]  = useState(0.1);
+  const [windScale,  setWind]   = useState(15.0);
 
   const didInitTimeFocus = React.useRef(false);
 
@@ -655,6 +655,46 @@ export default function Page() {
   const scaledSolar = useMemo(()=>parsedSolar.map(p=>({...p,value:p.value*solarScale})),[parsedSolar,solarScale]);
   const scaledWind  = useMemo(()=>parsedWind.map(p=>({...p,value:p.value*windScale})), [parsedWind, windScale]);
   const scaledTotal = useMemo(()=>{const l=Math.min(scaledSolar.length,scaledWind.length);return Array.from({length:l},(_,i)=>({date:scaledSolar[i].date,value:scaledSolar[i].value+scaledWind[i].value}));},[scaledSolar,scaledWind]);
+
+  const solarTypicalDay = useMemo(()=>{
+    const pts = solarData?.points;
+    if (!pts || !pts.length) return [] as Point[];
+    const hourMap = new Map<number,{sum:number;count:number}>();
+    for (const p of pts) {
+      const d = new Date(p.date);
+      const h = d.getHours();
+      const prev = hourMap.get(h) ?? { sum: 0, count: 0 };
+      prev.sum += p.value * solarScale;
+      prev.count += 1;
+      hourMap.set(h, prev);
+    }
+    const base = Date.UTC(2000,0,1,0,0,0,0);
+    return Array.from({length:24},(_,h)=>{
+      const agg = hourMap.get(h);
+      const v = agg && agg.count ? agg.sum/agg.count : 0;
+      return { date: new Date(base + h*3600*1000).toISOString(), value: v };
+    });
+  },[solarData, solarScale]);
+
+  const windTypicalDay = useMemo(()=>{
+    const pts = dataset === "wind_raw" ? (windRawData?.points ?? []) : (windData?.points ?? []);
+    if (!pts.length) return [] as Point[];
+    const hourMap = new Map<number,{sum:number;count:number}>();
+    for (const p of pts) {
+      const d = new Date(p.date);
+      const h = d.getHours();
+      const prev = hourMap.get(h) ?? { sum: 0, count: 0 };
+      prev.sum += p.value * windScale;
+      prev.count += 1;
+      hourMap.set(h, prev);
+    }
+    const base = Date.UTC(2000,0,1,0,0,0,0);
+    return Array.from({length:24},(_,h)=>{
+      const agg = hourMap.get(h);
+      const v = agg && agg.count ? agg.sum/agg.count : 0;
+      return { date: new Date(base + h*3600*1000).toISOString(), value: v };
+    });
+  },[dataset, windData, windRawData, windScale]);
 
   function computeStats(pts:Point[]) {
     if (!pts.length) return {min:null,max:null,avg:null,count:0};
@@ -780,6 +820,30 @@ export default function Page() {
                 :<div className="card" style={{padding:20}}>
                   <Chart series={{solar:dataset==="solar"||dataset==="both"?scaledSolar:undefined,wind:dataset==="wind"||dataset==="wind_raw"||dataset==="both"?scaledWind:undefined}}/>
                 </div>}
+
+                {!loading&&!error&&solarTypicalDay.length>0&&windTypicalDay.length>0&&(
+                  <>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+                      <div className="card" style={{padding:20}}>
+                      <Chart
+                        series={{ solar: solarTypicalDay }}
+                        labels={{ solar: "Typical Day (Avg Solar)" }}
+                      />
+                      </div>
+                      <div className="card" style={{padding:20}}>
+                      <Chart
+                        series={{ wind: windTypicalDay }}
+                        labels={{ wind: "Typical Day (Avg Wind)" }}
+                      />
+                      </div>
+                    </div>
+                    <div style={{marginTop:10,fontSize:12,color:"var(--text-secondary)",lineHeight:1.45}}>
+                      The optimizer combines and scales these solar and wind curves to meet the baseload constraints.
+                      Because different days can deviate significantly from the average “typical day”, we cannot rely on averages only;
+                      we evaluate the constraints across all days (hour-by-hour) during optimization.
+                    </div>
+                  </>
+                )}
                 {!loading&&!error&&<>
                   {dataset==="solar"&&<Stats stats={computeStats(scaledSolar)} accent="var(--green)"/>}
                   {(dataset==="wind"||dataset==="wind_raw")&&<Stats stats={computeStats(scaledWind)} accent="var(--blue)"/>}
