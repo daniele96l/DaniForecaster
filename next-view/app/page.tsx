@@ -882,7 +882,6 @@ function OptimizationPanel() {
   const { status, error, result, runOptimization } = useOptimization();
   const [optMonth, setOptMonth] = useState<number|null>(null);
   const [optDay,   setOptDay]   = useState<number|null>(null);
-  const [showLog,  setShowLog]  = useState(false);
   const didInitFocus = React.useRef(false);
 
   const best = result?{s:result.bestS,w:result.bestW,b:result.bestB}:null;
@@ -949,6 +948,23 @@ function OptimizationPanel() {
     focusedSeries.map(p=>({date:p.date,production:p.productionCombined,baseload:p.baseload}))
   ,[focusedSeries]);
 
+  const gridSamplesSortedForLog = useMemo(()=>{
+    if (!result?.gridSamples) return [];
+    const bestSVal = result.bestS;
+    const bestWVal = result.bestW;
+    const bestBVal = result.bestB;
+    return [...result.gridSamples].sort((a,b)=>{
+      const aWin = a.sMw === bestSVal && a.wMw === bestWVal;
+      const bWin = b.sMw === bestSVal && b.wMw === bestWVal;
+      if (aWin && !bWin) return -1;
+      if (!aWin && bWin) return 1;
+      // Keep deterministic order after winner.
+      const da = a.baseloadMw - bestBVal;
+      const db = b.baseloadMw - bestBVal;
+      return Math.abs(db) - Math.abs(da);
+    });
+  },[result]);
+
   return (
     <div className="opt-layout">
       {/* Header */}
@@ -980,7 +996,6 @@ function OptimizationPanel() {
           <button id="btn-run-opt" type="button" className="btn btn-primary" onClick={()=>runOptimization({targetCurtailment:0.1,stepMw:10})} disabled={status==="running"}>
             <span className="btn-icon">{status==="running"?"⏳":"▶"}</span>{status==="running"?"Running…":"Run Optimization"}
           </button>
-          {result?.gridSamples?.length&&<button id="btn-view-log" type="button" className="btn btn-secondary" onClick={()=>setShowLog(true)}><span className="btn-icon">📋</span>Log ({result.gridSamples.length})</button>}
         </div>
       </div>
 
@@ -1001,7 +1016,72 @@ function OptimizationPanel() {
       </>}
 
       {/* What-if explorer */}
-      {result?.gridSamples?.length&&<WhatIfExplorer gridSamples={result.gridSamples} bestS={result.bestS} bestW={result.bestW} bestB={result.bestB}/>}
+      {result?.gridSamples?.length&&(
+        <div style={{display:"flex",gap:16,alignItems:"flex-start",width:"100%",minWidth:0}}>
+          <div style={{flex:"1 1 0",minWidth:0}}>
+            <WhatIfExplorer
+              gridSamples={result.gridSamples}
+              bestS={result.bestS}
+              bestW={result.bestW}
+              bestB={result.bestB}
+            />
+          </div>
+
+          <div
+            style={{
+              width:450,
+              maxWidth:"40vw",
+              borderRadius:"var(--radius-md)",
+              border:`1px solid var(--border)`,
+              background:"rgba(10,16,36,.85)",
+              overflow:"hidden",
+            }}
+          >
+            <div
+              style={{
+                padding:"12px 14px",
+                display:"flex",
+                justifyContent:"space-between",
+                alignItems:"flex-start",
+                gap:12,
+                borderBottom:`1px solid var(--border)`,
+              }}
+            >
+              <div>
+                <div style={{fontSize:12,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",color:"var(--text-muted)"}}>
+                  📋 Optimization Log
+                </div>
+                <div style={{fontSize:12,color:"var(--text-secondary)",marginTop:4}}>
+                  {result.gridSamples.length} combinations — best highlighted
+                </div>
+              </div>
+            </div>
+
+            <div style={{maxHeight:520,overflow:"auto",padding:"10px 12px"}}>
+              <table className="opt-table">
+                <thead>
+                  <tr>
+                    {["S (MW)","W (MW)","Baseload (MW)","Daily avg (MW)","Error (%)"].map((h)=>(
+                      <th key={h}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {gridSamplesSortedForLog.map((s,i)=>(
+                    <tr key={i} className={s.sMw===result.bestS&&s.wMw===result.bestW?"best":""}>
+                      <td>{s.sMw.toFixed(1)}</td>
+                      <td>{s.wMw.toFixed(1)}</td>
+                      <td>{s.baseloadMw.toFixed(2)}</td>
+                      <td>{s.dailyAvgProductionMw!=null?s.dailyAvgProductionMw.toFixed(2):"—"}</td>
+                      <td>{s.dailyErrorPct!=null?(s.dailyErrorPct*100).toFixed(2):"—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Month/Day filter + chart area */}
       {result&&(
@@ -1070,31 +1150,7 @@ function OptimizationPanel() {
         </>
       )}
 
-      {/* Log modal */}
-      {showLog&&result?.gridSamples&&(
-        <div className="modal-backdrop" onClick={()=>setShowLog(false)}>
-          <div className="modal" onClick={e=>e.stopPropagation()}>
-            <div className="modal-header">
-              <div><h3 className="modal-title">📋 Optimization Log</h3><p className="modal-sub">{result.gridSamples.length} combinations — best highlighted</p></div>
-              <button id="btn-close-log" type="button" className="btn btn-secondary" onClick={()=>setShowLog(false)} style={{padding:"6px 14px"}}>✕ Close</button>
-            </div>
-            <div className="modal-body">
-              <table className="opt-table">
-                <thead><tr>{["S (MW)","W (MW)","Baseload (MW)","Daily avg (MW)","Error (%)"].map(h=><th key={h}>{h}</th>)}</tr></thead>
-                <tbody>
-                  {result.gridSamples.map((s,i)=>(
-                    <tr key={i} className={s.sMw===result.bestS&&s.wMw===result.bestW?"best":""}>
-                      <td>{s.sMw.toFixed(1)}</td><td>{s.wMw.toFixed(1)}</td><td>{s.baseloadMw.toFixed(2)}</td>
-                      <td>{s.dailyAvgProductionMw!=null?s.dailyAvgProductionMw.toFixed(2):"—"}</td>
-                      <td>{s.dailyErrorPct!=null?(s.dailyErrorPct*100).toFixed(2):"—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Log modal removed: log now renders beside What-If Explorer */}
     </div>
   );
 }
