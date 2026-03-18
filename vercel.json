@@ -1,6 +1,7 @@
 {
   "installCommand": "cd next-view && npm install --legacy-peer-deps",
   "buildCommand": "cd next-view && npm run build",
-  "devCommand": "cd next-view && npm run dev"
+  "devCommand": "cd next-view && npm run dev",
+  "outputDirectory": "next-view/.next"
 }
 
