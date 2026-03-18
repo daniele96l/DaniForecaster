@@ -497,6 +497,25 @@ function WhatIfExplorer({ gridSamples, bestS, bestW, bestB }: { gridSamples: Gri
   const errorPct    = match?.dailyErrorPct         ?? null;
   const deltaB      = baseload!=null ? baseload - bestB : null;
 
+  // Visual severity for "Daily Error vs B".
+  // Optimization target is typically around -25% (i.e. daily avg >= 0.75 * B),
+  // so color is green near target and becomes progressively red when error drops.
+  const errorColor = (v: number | null) => {
+    if (v == null) return "var(--text-primary)";
+    const target = -0.25;
+    const worst = -1.0;
+    const green = { r: 34, g: 211, b: 165 }; // #22d3a5
+    const red = { r: 248, g: 113, b: 113 }; // #f87171
+    const clampedSeverity = Math.max(0, Math.min(1, (target - v) / (target - worst)));
+    // Make the scale go "very red" earlier (at ~50% severity).
+    // A power < 1 increases the perceived severity for values below 1.
+    const curved = Math.pow(clampedSeverity, 0.35);
+    const r = Math.round(green.r + (red.r - green.r) * curved);
+    const g = Math.round(green.g + (red.g - green.g) * curved);
+    const b = Math.round(green.b + (red.b - green.b) * curved);
+    return `rgb(${r},${g},${b})`;
+  };
+
   return (
     <div className="card" style={{padding:"22px 24px"}}>
       <div style={{marginBottom:16}}>
@@ -541,7 +560,7 @@ function WhatIfExplorer({ gridSamples, bestS, bestW, bestB }: { gridSamples: Gri
         {[
           { label:"Baseload", value: baseload!=null?`${baseload.toFixed(1)} MW`:"—", highlight: deltaB!=null&&deltaB!==0, delta: deltaB, icon:"⚡", color: deltaB!=null&&deltaB>0?"#22d3a5":deltaB!=null&&deltaB<0?"#f87171":"var(--text-primary)" },
           { label:"Daily Avg Prod", value: dailyAvg!=null?`${dailyAvg.toFixed(1)} MW`:"—", icon:"📊", color:"var(--text-primary)" },
-          { label:"Daily Error vs B", value: errorPct!=null?`${(errorPct*100).toFixed(1)} %`:"—", icon:"📐", color: errorPct!=null&&errorPct>0?"#fb923c":errorPct!=null&&errorPct<0?"#22d3a5":"var(--text-primary)" },
+          { label:"Daily Error vs B", value: errorPct!=null?`${(errorPct*100).toFixed(1)} %`:"—", icon:"📐", color: errorColor(errorPct) },
         ].map(item=>(
           <div key={item.label} style={{padding:"14px 16px",borderRadius:"var(--radius-md)",border:`1px solid ${isBest&&item.icon==="⚡"?"rgba(34,211,165,.4)":"var(--border)"}`,background:isBest&&item.icon==="⚡"?"rgba(34,211,165,.06)":"rgba(10,16,36,.8)",position:"relative",overflow:"hidden"}}>
             {isBest&&item.icon==="⚡" && <div style={{position:"absolute",top:0,left:0,right:0,height:2,background:"linear-gradient(90deg,#22d3a5,#60a5fa)"}}/>}
