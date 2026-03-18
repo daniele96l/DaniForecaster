@@ -120,7 +120,9 @@ function Chart({
 
 // ─── Dual-zone chart: shows curtailment (above baseload) & shortfall (below) ──
 function DualZoneChart({
-  series, baseloadLabel="Baseload"
+  series,
+  baseloadLabel = "Baseload",
+  showBattery = false,
 }: {
   series: {
     date: string;
@@ -132,6 +134,7 @@ function DualZoneChart({
     dischargeMw?: number;
   }[];
   baseloadLabel?: string;
+  showBattery?: boolean;
 }) {
   const [hover, setHover] = useState<number|null>(null);
   const parsed = useMemo(()=>series.map(p=>({
@@ -207,7 +210,11 @@ function DualZoneChart({
         <span style={{display:"flex",alignItems:"center",gap:6,color:"#818cf8"}}><span style={{width:22,height:3,background:"#818cf8",display:"inline-block",borderRadius:2,borderTop:"2px dashed #818cf8"}}/>{baseloadLabel}</span>
         <span style={{display:"flex",alignItems:"center",gap:6,color:"#fb923c"}}><span style={{width:14,height:14,background:"rgba(251,146,60,.35)",border:"1px solid #fb923c",display:"inline-block",borderRadius:3}}/> Curtailment (surplus)</span>
         <span style={{display:"flex",alignItems:"center",gap:6,color:"#f87171"}}><span style={{width:14,height:14,background:"rgba(248,113,113,.35)",border:"1px solid #f87171",display:"inline-block",borderRadius:3}}/> Shortfall (deficit)</span>
-        <span style={{display:"flex",alignItems:"center",gap:6,color:"#eab308"}}><span style={{width:22,height:3,background:"#eab308",display:"inline-block",borderRadius:2}}/> Battery SoC</span>
+        {showBattery && (
+          <span style={{display:"flex",alignItems:"center",gap:6,color:"#eab308"}}>
+            <span style={{width:22,height:3,background:"#eab308",display:"inline-block",borderRadius:2}}/> Battery SoC
+          </span>
+        )}
       </div>
 
       <svg viewBox={`0 0 ${W} ${H}`} className="chart-svg" style={{maxWidth:"100%"}}>
@@ -240,12 +247,22 @@ function DualZoneChart({
         <path d={baseD} fill="none" stroke="#818cf8" strokeWidth={1.4} strokeDasharray="7 5" strokeLinejoin="round" strokeOpacity={0.8}/>
 
         {/* Battery SoC line */}
-        <path d={socD} fill="none" stroke="#eab308" strokeWidth={1.6} strokeLinejoin="round" strokeLinecap="round" strokeDasharray="4 3"/>
+        {showBattery && (
+          <path
+            d={socD}
+            fill="none"
+            stroke="#eab308"
+            strokeWidth={1.6}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+            strokeDasharray="4 3"
+          />
+        )}
 
         {/* Production line (drawn on top for clarity) */}
         <path d={prodD} fill="none" stroke="#22d3a5" strokeWidth={2.6} strokeLinejoin="round" strokeLinecap="round" filter="url(#glow2)"/>
 
-        {/* Hover targets + battery flow markers + production dots */}
+        {/* Hover targets + optional battery flow markers + production dots */}
         {parsed.map((p,i)=>(
           <g key={i}>
             <rect x={xS(i)-4} y={P} width={8} height={H-2*P} fill="transparent"
@@ -260,7 +277,7 @@ function DualZoneChart({
               strokeWidth={0.7}
             />
             {/* Battery charge marker between production and SoC (flow into battery) */}
-            {p.charge > 0 && (
+            {showBattery && p.charge > 0 && (
               <text
                 x={xS(i)}
                 y={yS((p.prod + p.soc) / 2)}
@@ -272,7 +289,7 @@ function DualZoneChart({
               </text>
             )}
             {/* Battery discharge markers: dot on baseload + arrow from SoC (flow out of battery) */}
-            {p.discharge > 0 && (
+            {showBattery && p.discharge > 0 && (
               <>
                 <circle
                   cx={xS(i)}
@@ -1016,7 +1033,11 @@ function BatteryOptimizationPanel() {
           {dualZoneBatterySeries.length>0&&<>
             <div className="section-eyebrow">📈 Effective Production vs Baseload (with Battery)</div>
             <div className="card" style={{padding:"20px 24px"}}>
-              <DualZoneChart series={dualZoneBatterySeries} baseloadLabel="Baseload (with ideal storage)"/>
+              <DualZoneChart
+                series={dualZoneBatterySeries}
+                baseloadLabel="Baseload (with ideal storage)"
+                showBattery
+              />
             </div>
           </>}
 
