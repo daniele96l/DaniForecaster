@@ -122,14 +122,30 @@ function Chart({
 function DualZoneChart({
   series, baseloadLabel="Baseload"
 }: {
-  series: { date: string; production: number; baseload: number }[];
+  series: {
+    date: string;
+    production: number;
+    baseload: number;
+    usingBattery?: boolean;
+    batterySoc?: number;
+    chargeMw?: number;
+    dischargeMw?: number;
+  }[];
   baseloadLabel?: string;
 }) {
   const [hover, setHover] = useState<number|null>(null);
-  const parsed = useMemo(()=>series.map(p=>({date:new Date(p.date),prod:p.production,base:p.baseload})),[series]);
+  const parsed = useMemo(()=>series.map(p=>({
+    date:new Date(p.date),
+    prod:p.production,
+    base:p.baseload,
+    usingBattery: p.usingBattery ?? false,
+    soc:p.batterySoc ?? 0,
+    charge:p.chargeMw ?? 0,
+    discharge:p.dischargeMw ?? 0,
+  })),[series]);
   if (!parsed.length) return <div className="state-box"><span style={{fontSize:28,opacity:.3}}>📊</span><span>No data</span></div>;
   const W=900, H=320, P=50;
-  const allV = parsed.flatMap(p=>[p.prod,p.base]);
+  const allV = parsed.flatMap(p=>[p.prod,p.base,p.soc]);
   const minY = Math.min(...allV), maxY = Math.max(...allV);
   const spanY = maxY - minY || 1;
   const xS = (i:number) => P + ((W-P*2)*i)/Math.max(1,parsed.length-1);
@@ -139,6 +155,7 @@ function DualZoneChart({
   // Build path strings
   const prodD = parsed.map((p,i)=>(i===0?`M ${xS(i)} ${yS(p.prod)}`:`L ${xS(i)} ${yS(p.prod)}`)).join(" ");
   const baseD = parsed.map((p,i)=>(i===0?`M ${xS(i)} ${yS(p.base)}`:`L ${xS(i)} ${yS(p.base)}`)).join(" ");
+  const socD  = parsed.map((p,i)=>(i===0?`M ${xS(i)} ${yS(p.soc)}`:`L ${xS(i)} ${yS(p.soc)}`)).join(" ");
 
   // Curtailment polygon: area between prod and base where prod > base
   // Shortfall polygon: area between base and prod where prod < base
@@ -190,6 +207,7 @@ function DualZoneChart({
         <span style={{display:"flex",alignItems:"center",gap:6,color:"#818cf8"}}><span style={{width:22,height:3,background:"#818cf8",display:"inline-block",borderRadius:2,borderTop:"2px dashed #818cf8"}}/>{baseloadLabel}</span>
         <span style={{display:"flex",alignItems:"center",gap:6,color:"#fb923c"}}><span style={{width:14,height:14,background:"rgba(251,146,60,.35)",border:"1px solid #fb923c",display:"inline-block",borderRadius:3}}/> Curtailment (surplus)</span>
         <span style={{display:"flex",alignItems:"center",gap:6,color:"#f87171"}}><span style={{width:14,height:14,background:"rgba(248,113,113,.35)",border:"1px solid #f87171",display:"inline-block",borderRadius:3}}/> Shortfall (deficit)</span>
+        <span style={{display:"flex",alignItems:"center",gap:6,color:"#eab308"}}><span style={{width:22,height:3,background:"#eab308",display:"inline-block",borderRadius:2}}/> Battery SoC</span>
       </div>
 
       <svg viewBox={`0 0 ${W} ${H}`} className="chart-svg" style={{maxWidth:"100%"}}>
@@ -218,16 +236,64 @@ function DualZoneChart({
         {/* Shortfall zones */}
         {shrtSegments.map((d,i)=><path key={`s${i}`} d={d} fill="url(#shrtGrad)" opacity={.85}/>)}
 
-        {/* Baseload dashed line */}
-        <path d={baseD} fill="none" stroke="#818cf8" strokeWidth={1.8} strokeDasharray="7 5" strokeLinejoin="round"/>
+        {/* Baseload dashed line (drawn underneath) */}
+        <path d={baseD} fill="none" stroke="#818cf8" strokeWidth={1.4} strokeDasharray="7 5" strokeLinejoin="round" strokeOpacity={0.8}/>
 
-        {/* Production line */}
-        <path d={prodD} fill="none" stroke="#22d3a5" strokeWidth={2.2} strokeLinejoin="round" strokeLinecap="round" filter="url(#glow2)"/>
+        {/* Battery SoC line */}
+        <path d={socD} fill="none" stroke="#eab308" strokeWidth={1.6} strokeLinejoin="round" strokeLinecap="round" strokeDasharray="4 3"/>
 
-        {/* Hover targets */}
-        {parsed.map((_,i)=>(
-          <rect key={i} x={xS(i)-4} y={P} width={8} height={H-2*P} fill="transparent"
-            onMouseEnter={()=>setHover(i)} onMouseLeave={()=>setHover(null)}/>
+        {/* Production line (drawn on top for clarity) */}
+        <path d={prodD} fill="none" stroke="#22d3a5" strokeWidth={2.6} strokeLinejoin="round" strokeLinecap="round" filter="url(#glow2)"/>
+
+        {/* Hover targets + battery flow markers + production dots */}
+        {parsed.map((p,i)=>(
+          <g key={i}>
+            <rect x={xS(i)-4} y={P} width={8} height={H-2*P} fill="transparent"
+              onMouseEnter={()=>setHover(i)} onMouseLeave={()=>setHover(null)}/>
+            {/* Small dot on production so it's visible even when it coincides with baseload */}
+            <circle
+              cx={xS(i)}
+              cy={yS(p.prod)}
+              r={2.3}
+              fill="#22d3a5"
+              stroke="#0f172a"
+              strokeWidth={0.7}
+            />
+            {/* Battery charge marker between production and SoC (flow into battery) */}
+            {p.charge > 0 && (
+              <text
+                x={xS(i)}
+                y={yS((p.prod + p.soc) / 2)}
+                textAnchor="middle"
+                fontSize={9}
+                fill="#22c55e"
+              >
+                ↑
+              </text>
+            )}
+            {/* Battery discharge markers: dot on baseload + arrow from SoC (flow out of battery) */}
+            {p.discharge > 0 && (
+              <>
+                <circle
+                  cx={xS(i)}
+                  cy={yS(p.base)}
+                  r={2.8}
+                  fill="#facc15"
+                  stroke="#1e293b"
+                  strokeWidth={0.8}
+                />
+                <text
+                  x={xS(i)}
+                  y={yS((p.soc + p.base) / 2)}
+                  textAnchor="middle"
+                  fontSize={9}
+                  fill="#facc15"
+                >
+                  ↓
+                </text>
+              </>
+            )}
+          </g>
         ))}
 
         {/* Hover tooltip */}
@@ -392,9 +458,60 @@ function WhatIfExplorer({ gridSamples, bestS, bestW, bestB }: { gridSamples: Gri
   );
 }
 
+// ─── Ideal battery simulation helper ──────────────────────────────────────────
+function simulateIdealBattery(series: SeriesPoint[]) {
+  const n = series.length;
+  const out: (SeriesPoint & {
+    batteryCharge: number;
+    batteryDischarge: number;
+    batterySoc: number;
+    effectiveProd: number;
+    residualDeficit: number;
+  })[] = new Array(n);
+
+  let prevSoc = 0;
+
+  for (let i = 0; i < n; i++) {
+    const p = series[i];
+    const P = p.productionCombined;
+    const B = p.baseload;
+
+    const surplus = Math.max(P - B, 0);
+    const rawDeficit = Math.max(B - P, 0);
+
+    let charge = 0;
+    let discharge = 0;
+    let soc = prevSoc;
+
+    if (surplus > 0) {
+      charge = surplus;
+      soc = prevSoc + charge;
+    } else if (rawDeficit > 0) {
+      discharge = Math.min(rawDeficit, prevSoc);
+      soc = prevSoc - discharge;
+    }
+
+    const effectiveProd = P + discharge - charge;
+    const residualDeficit = Math.max(B - effectiveProd, 0);
+
+    out[i] = {
+      ...p,
+      batteryCharge: Number(charge.toFixed(3)),
+      batteryDischarge: Number(discharge.toFixed(3)),
+      batterySoc: Number(soc.toFixed(3)),
+      effectiveProd: Number(effectiveProd.toFixed(2)),
+      residualDeficit: Number(residualDeficit.toFixed(2)),
+    };
+
+    prevSoc = soc;
+  }
+
+  return out;
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 export default function Page() {
-  const [view, setView]         = useState<"timeseries"|"optimization">("timeseries");
+  const [view, setView]         = useState<"timeseries"|"optimization"|"battery">("timeseries");
   const [dataset, setDataset]   = useState<Dataset>("solar");
   const [year, setYear]         = useState<number|null>(null);
   const [month, setMonth]       = useState<number|null>(null);
@@ -453,7 +570,11 @@ export default function Page() {
           <div><h1 className="header-title">Energy Explorer</h1><p className="header-sub">Solar &amp; Wind Dashboard</p></div>
         </div>
         <nav className="tab-nav">
-          {([{id:"timeseries",label:"📈 Time Series"},{id:"optimization",label:"⚙ Optimization"}] as {id:typeof view;label:string}[]).map(tab=>(
+          {([
+            {id:"timeseries",   label:"📈 Time Series"},
+            {id:"optimization", label:"⚙ Optimization"},
+            {id:"battery",      label:"🔋 Optimize + Battery"},
+          ] as {id:typeof view;label:string}[]).map(tab=>(
             <button key={tab.id} type="button" id={`tab-${tab.id}`} className={`tab-btn ${view===tab.id?"active":""}`} onClick={()=>setView(tab.id)}>{tab.label}</button>
           ))}
         </nav>
@@ -523,6 +644,13 @@ export default function Page() {
         {view==="optimization" && (
           <div style={{width:"100%",maxWidth:1200,margin:"0 auto"}}>
             <OptimizationPanel/>
+          </div>
+        )}
+
+        {/* ══ OPTIMIZATION + BATTERY ══ */}
+        {view==="battery" && (
+          <div style={{width:"100%",maxWidth:1200,margin:"0 auto"}}>
+            <BatteryOptimizationPanel/>
           </div>
         )}
       </main>
@@ -724,6 +852,199 @@ function OptimizationPanel() {
             </div>
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Optimization + Battery Panel ─────────────────────────────────────────────
+function BatteryOptimizationPanel() {
+  const { status, error, result, runOptimization } = useOptimization();
+  const [optMonth, setOptMonth] = useState<number|null>(null);
+  const [optDay,   setOptDay]   = useState<number|null>(null);
+
+  const best = result?{s:result.bestS,w:result.bestW,b:result.bestB}:null;
+
+  const monthOptions = useMemo(()=>{
+    if (!result) return [] as number[];
+    const set=new Set<number>();
+    for(const p of result.series) set.add(new Date(p.date).getMonth()+1);
+    return Array.from(set).sort((a,b)=>a-b);
+  },[result]);
+
+  const dayOptions = useMemo(()=>{
+    if (!result) return [] as number[];
+    const set=new Set<number>();
+    for(const p of result.series){const d=new Date(p.date);if(optMonth!=null&&d.getMonth()+1!==optMonth)continue;set.add(d.getDate());}
+    return Array.from(set).sort((a,b)=>a-b);
+  },[result,optMonth]);
+
+  const batterySeries = useMemo(()=>{
+    if (!result) return [];
+    const enriched = simulateIdealBattery(result.series);
+    return enriched.filter(p=>{
+      const d=new Date(p.date);
+      if(optMonth!=null&&d.getMonth()+1!==optMonth) return false;
+      if(optDay!=null&&d.getDate()!==optDay) return false;
+      return true;
+    });
+  },[result,optMonth,optDay]);
+
+  const originalSeries = useMemo(()=>{
+    if (!result) return [];
+    return result.series.filter(p=>{
+      const d=new Date(p.date);
+      if(optMonth!=null&&d.getMonth()+1!==optMonth) return false;
+      if(optDay!=null&&d.getDate()!==optDay) return false;
+      return true;
+    });
+  },[result,optMonth,optDay]);
+
+  const summaryStats = useMemo(()=>{
+    if (!result) return null;
+    const bat = simulateIdealBattery(result.series);
+    let totalDefBefore = 0;
+    let totalDefAfter = 0;
+    let hoursDefBefore = 0;
+    let hoursDefAfter = 0;
+    for (let i=0;i<bat.length;i++) {
+      const p = result.series[i];
+      const B = p.baseload;
+      const P = p.productionCombined;
+      const before = Math.max(B - P, 0);
+      const after = bat[i].residualDeficit;
+      totalDefBefore += before;
+      totalDefAfter  += after;
+      if (before > 0) hoursDefBefore++;
+      if (after  > 0) hoursDefAfter++;
+    }
+    const n = bat.length || 1;
+    const reduction = totalDefBefore>0 ? 100*(1-totalDefAfter/totalDefBefore) : 0;
+    return {
+      totalDefBefore,
+      totalDefAfter,
+      avgDefBefore: totalDefBefore/n,
+      avgDefAfter: totalDefAfter/n,
+      hoursDefBefore,
+      hoursDefAfter,
+      pctHoursDefBefore: 100*hoursDefBefore/n,
+      pctHoursDefAfter: 100*hoursDefAfter/n,
+      reductionPct: reduction,
+    };
+  },[result]);
+
+  const dualZoneBatterySeries = useMemo(()=>
+    batterySeries.map(p=>({
+      date: p.date,
+      production: p.effectiveProd,
+      baseload: p.baseload,
+      usingBattery: p.batteryDischarge > 0,
+      batterySoc: p.batterySoc,
+      chargeMw: p.batteryCharge,
+      dischargeMw: p.batteryDischarge,
+    }))
+  ,[batterySeries]);
+
+  return (
+    <div className="opt-layout">
+      <div className="opt-header-card">
+        <div className="opt-description-block">
+          <div className="opt-eyebrow">🔋 Optimization + Ideal Battery</div>
+          <h2 className="opt-title">Baseload with Curtailment Storage</h2>
+          <p className="opt-desc">
+            We reuse the optimized solar + wind mix and imagine a <strong>perfect battery</strong> that
+            stores all curtailed energy (production above baseload) and discharges it later during
+            deficits. This shows how much a simple storage layer could reduce night shortfalls and
+            improve effective baseload coverage, keeping the promised baseload B unchanged.
+          </p>
+        </div>
+        <div className="opt-actions">
+          <button
+            id="btn-run-opt-battery"
+            type="button"
+            className="btn btn-primary"
+            onClick={()=>runOptimization({targetCurtailment:0.1,stepMw:10})}
+            disabled={status==="running"}
+          >
+            <span className="btn-icon">{status==="running"?"⏳":"▶"}</span>
+            {status==="running"?"Running…":"Run Optimization + Battery"}
+          </button>
+        </div>
+      </div>
+
+      {status==="running"&&<div className="running-banner"><div className="spinner" style={{width:20,height:20,borderWidth:2}}/> Running grid search… this may take a few seconds.</div>}
+      {error&&<div className="error-banner">⚠️ {error}</div>}
+
+      {best&&summaryStats&&<>
+        <div className="section-eyebrow">🏆 Optimized Mix + Storage Impact</div>
+        <div className="stats-grid">
+          {[
+            {label:"Solar Capacity",value:`${best.s.toFixed(1)} MW`,icon:"☀️"},
+            {label:"Wind Capacity",value:`${best.w.toFixed(1)} MW`,icon:"🌬️"},
+            {label:"Baseload",value:`${best.b.toFixed(1)} MW`,icon:"⚡"},
+            {label:"Deficit Energy Reduced",value:`${summaryStats.reductionPct.toFixed(1)} %`,icon:"📉"},
+          ].map(item=>(
+            <div key={item.label} className="result-card">
+              <div className="result-label">{item.icon} {item.label}</div>
+              <div className="result-value">{item.value}</div>
+            </div>
+          ))}
+        </div>
+      </>}
+
+      {result&&(
+        <>
+          <div className="controls-bar" style={{flexWrap:"wrap",gap:12}}>
+            <span style={{fontSize:11,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",color:"var(--text-muted)"}}>🔍 Focus on</span>
+            <div className="controls-group">
+              <label className="control-label">Month
+                <select id="opt-month-battery" className="control-select" value={optMonth??""} onChange={e=>setOptMonth(e.target.value?Number(e.target.value):null)}>
+                  <option value="">All</option>
+                  {monthOptions.map(m=><option key={m} value={m}>{m.toString().padStart(2,"0")}</option>)}
+                </select>
+              </label>
+              <label className="control-label">Day
+                <select id="opt-day-battery" className="control-select" value={optDay??""} onChange={e=>setOptDay(e.target.value?Number(e.target.value):null)}>
+                  <option value="">All</option>
+                  {dayOptions.map(d=><option key={d} value={d}>{d.toString().padStart(2,"0")}</option>)}
+                </select>
+              </label>
+            </div>
+            {batterySeries.length>0&&<span className="points-badge">{batterySeries.length.toLocaleString()} hours</span>}
+          </div>
+
+          {dualZoneBatterySeries.length>0&&<>
+            <div className="section-eyebrow">📈 Effective Production vs Baseload (with Battery)</div>
+            <div className="card" style={{padding:"20px 24px"}}>
+              <DualZoneChart series={dualZoneBatterySeries} baseloadLabel="Baseload (with ideal storage)"/>
+            </div>
+          </>}
+
+          {batterySeries.length>0&&(
+            <div className="two-col">
+              <div>
+                <div className="section-eyebrow" style={{color:"#22d3a5"}}>🔋 Battery State of Charge</div>
+                <div className="card" style={{padding:"16px 20px"}}>
+                  <Chart
+                    series={{solar:batterySeries.map(p=>({date:p.date,value:p.batterySoc}))}}
+                    labels={{solar:"Battery SoC (MWh eq.)"}}
+                    unit="MWh"
+                  />
+                </div>
+              </div>
+              <div>
+                <div className="section-eyebrow" style={{color:"#f97316"}}>📉 Residual Deficit vs Baseload</div>
+                <div className="card" style={{padding:"16px 20px"}}>
+                  <Chart
+                    series={{solar:originalSeries.map(p=>({date:p.date,value:Math.max(p.baseload-p.productionCombined,0)})),wind:batterySeries.map(p=>({date:p.date,value:p.residualDeficit}))}}
+                    labels={{solar:"Before storage",wind:"After storage"}}
+                    unit="MW"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
