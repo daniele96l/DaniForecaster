@@ -142,6 +142,8 @@ function DualZoneChart({
   series,
   baseloadLabel = "Baseload",
   showBattery = false,
+  yMin,
+  yMax,
 }: {
   series: {
     date: string;
@@ -154,6 +156,8 @@ function DualZoneChart({
   }[];
   baseloadLabel?: string;
   showBattery?: boolean;
+  yMin?: number;
+  yMax?: number;
 }) {
   const [hover, setHover] = useState<number|null>(null);
   const svgRef = React.useRef<SVGSVGElement|null>(null);
@@ -170,7 +174,8 @@ function DualZoneChart({
   if (!parsed.length) return <div className="state-box"><span style={{fontSize:28,opacity:.3}}>📊</span><span>No data</span></div>;
   const W=900, H=320, P=50;
   const allV = parsed.flatMap(p=>[p.prod,p.base,p.soc]);
-  const minY = Math.min(...allV), maxY = Math.max(...allV);
+  const minY = yMin ?? Math.min(...allV);
+  const maxY = yMax ?? Math.max(...allV);
   const spanY = maxY - minY || 1;
   const xS = (i:number) => P + ((W-P*2)*i)/Math.max(1,parsed.length-1);
   const yS = (v:number) => H-P - ((H-P*2)*(v-minY))/spanY;
@@ -1161,6 +1166,7 @@ function BatteryOptimizationPanel() {
   const [optMonth, setOptMonth] = useState<number|null>(null);
   const [optDay,   setOptDay]   = useState<number|null>(null);
   const didInitFocus = React.useRef(false);
+  const [batteryEnabled, setBatteryEnabled] = useState(true);
 
   const best = result?{s:result.bestS,w:result.bestW,b:result.bestB}:null;
 
@@ -1254,17 +1260,46 @@ function BatteryOptimizationPanel() {
     };
   },[result]);
 
-  const dualZoneBatterySeries = useMemo(()=>
-    batterySeries.map(p=>({
+  const dualZoneMainSeries = useMemo(() => {
+    if (!result) return [];
+    if (batteryEnabled) {
+      return batterySeries.map(p => ({
+        date: p.date,
+        production: p.effectiveProd,
+        baseload: p.baseload,
+        usingBattery: p.batteryDischarge > 0,
+        batterySoc: p.batterySoc,
+        chargeMw: p.batteryCharge,
+        dischargeMw: p.batteryDischarge,
+      }));
+    }
+    return originalSeries.map(p => ({
       date: p.date,
-      production: p.effectiveProd,
+      production: p.productionCombined,
       baseload: p.baseload,
-      usingBattery: p.batteryDischarge > 0,
-      batterySoc: p.batterySoc,
-      chargeMw: p.batteryCharge,
-      dischargeMw: p.batteryDischarge,
-    }))
-  ,[batterySeries]);
+      usingBattery: false,
+      batterySoc: 0,
+      chargeMw: 0,
+      dischargeMw: 0,
+    }));
+  }, [result, batteryEnabled, batterySeries, originalSeries]);
+
+  const fixedYDomain = useMemo(() => {
+    if (!result) return null;
+    const vals: number[] = [];
+    for (const p of originalSeries) {
+      vals.push(p.productionCombined);
+      vals.push(p.baseload);
+    }
+    // Include SOC and effective production so the scale doesn't jump when toggling.
+    for (const p of batterySeries) {
+      vals.push(p.effectiveProd);
+      vals.push(p.baseload);
+      vals.push(p.batterySoc);
+    }
+    if (!vals.length) return null;
+    return { min: Math.min(...vals), max: Math.max(...vals) };
+  }, [result, originalSeries, batterySeries]);
 
   return (
     <div className="opt-layout">
@@ -1334,13 +1369,62 @@ function BatteryOptimizationPanel() {
             {batterySeries.length>0&&<span className="points-badge">{batterySeries.length.toLocaleString()} hours</span>}
           </div>
 
-          {dualZoneBatterySeries.length>0&&<>
-            <div className="section-eyebrow">📈 Effective Production vs Baseload (with Battery)</div>
+          {dualZoneMainSeries.length>0&&<>
+            <div className="section-eyebrow" style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+              <span>📈 Effective Production vs Baseload {batteryEnabled ? "(with Battery)" : "(without Battery)"}</span>
+              <button
+                id="btn-toggle-battery-effect"
+                type="button"
+                onClick={()=>setBatteryEnabled(v=>!v)}
+                aria-pressed={batteryEnabled}
+                style={{
+                  display:"inline-flex",
+                  alignItems:"center",
+                  gap:10,
+                  fontSize:12,
+                  color:"var(--text-secondary)",
+                  background:"transparent",
+                  border:`1px solid var(--border)`,
+                  borderRadius:"999px",
+                  padding:"6px 10px",
+                  cursor:"pointer",
+                  userSelect:"none"
+                }}
+              >
+                <span style={{fontWeight:800}}>Battery effect</span>
+                <span
+                  style={{
+                    width:44,
+                    height:22,
+                    borderRadius:999,
+                    background: batteryEnabled ? "rgba(34,211,165,.25)" : "rgba(148,163,184,.18)",
+                    border: `1px solid ${batteryEnabled ? "rgba(34,211,165,.55)" : "rgba(148,163,184,.35)"}`,
+                    position:"relative",
+                    display:"inline-block"
+                  }}
+                >
+                  <span
+                    style={{
+                      position:"absolute",
+                      top:2,
+                      left: batteryEnabled ? 22 : 2,
+                      width:18,
+                      height:18,
+                      borderRadius:999,
+                      background: batteryEnabled ? "#22d3a5" : "#94a3b8",
+                      transition:"left 140ms ease"
+                    }}
+                  />
+                </span>
+              </button>
+            </div>
             <div className="card" style={{padding:"20px 24px"}}>
               <DualZoneChart
-                series={dualZoneBatterySeries}
-                baseloadLabel="Baseload (with ideal storage)"
-                showBattery
+                series={dualZoneMainSeries}
+                baseloadLabel="Baseload"
+                showBattery={batteryEnabled}
+                yMin={fixedYDomain?.min}
+                yMax={fixedYDomain?.max}
               />
             </div>
           </>}
