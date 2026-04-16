@@ -286,7 +286,7 @@ def _classification_metrics_block(
         for i, lbl in enumerate(labels)
     }
     try:
-        block["log_loss"] = float(log_loss(yt, proba, labels=classes, eps=1e-15))
+        block["log_loss"] = float(log_loss(yt, proba, labels=classes))
     except Exception:
         block["log_loss"] = None
     try:
@@ -840,7 +840,7 @@ def cross_validate_params(
             proba_v = model.predict_proba(valid_fold[FEATURE_COLS])
             ll: Optional[float] = None
             try:
-                ll = float(log_loss(yt, proba_v, labels=model.classes_, eps=1e-15))
+                ll = float(log_loss(yt, proba_v, labels=model.classes_))
             except ValueError:
                 ll = None
             fold_rows.append(
