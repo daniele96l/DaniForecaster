@@ -132,19 +132,31 @@ def get_time_cv_splits(train_df: pd.DataFrame, n_splits: int = 5) -> list[Tuple[
     return splits
 
 
-def cross_validate_params(train_df: pd.DataFrame, params: Dict[str, int | float | str | None]) -> float:
+def cross_validate_params(
+    train_df: pd.DataFrame,
+    params: Dict[str, int | float | str | None],
+    trial: optuna.trial.Trial | None = None,
+) -> float:
     cv_splits = get_time_cv_splits(train_df, n_splits=5)
     fold_scores = []
-    for train_fold, valid_fold in cv_splits:
+    for fold_idx, (train_fold, valid_fold) in enumerate(cv_splits):
         model = RandomForestClassifier(**params)
         model.fit(train_fold[FEATURE_COLS], train_fold["next_month_up"])
         pred = model.predict(valid_fold[FEATURE_COLS])
         fold_scores.append(f1_score(valid_fold["next_month_up"], pred))
+        if trial is not None:
+            intermediate_score = float(sum(fold_scores) / len(fold_scores))
+            trial.report(intermediate_score, step=fold_idx)
+            if trial.should_prune():
+                raise optuna.exceptions.TrialPruned()
     return float(sum(fold_scores) / len(fold_scores))
 
 
-def tune_hyperparameters(train_df: pd.DataFrame, n_trials: int = 30) -> Dict[str, int | float | str | None]:
+def tune_hyperparameters(
+    train_df: pd.DataFrame, n_trials: int = 30, early_stopping_patience: int = 8
+) -> Dict[str, int | float | str | None]:
     class_weight = get_class_weight(train_df)
+    tracker = {"best_score": float("-inf"), "no_improve_count": 0}
 
     def objective(trial: optuna.trial.Trial) -> float:
         params: Dict[str, int | float | str | None] = {
@@ -158,10 +170,25 @@ def tune_hyperparameters(train_df: pd.DataFrame, n_trials: int = 30) -> Dict[str
             "class_weight": class_weight,
             "n_jobs": -1,
         }
-        return cross_validate_params(train_df, params)
+        return cross_validate_params(train_df, params, trial=trial)
 
-    study = optuna.create_study(direction="maximize")
-    study.optimize(objective, n_trials=n_trials)
+    def early_stop_callback(study: optuna.study.Study, current_trial: optuna.trial.FrozenTrial) -> None:
+        if current_trial.state != optuna.trial.TrialState.COMPLETE:
+            return
+        current_best = study.best_value
+        if current_best > tracker["best_score"] + 1e-4:
+            tracker["best_score"] = current_best
+            tracker["no_improve_count"] = 0
+        else:
+            tracker["no_improve_count"] += 1
+        if tracker["no_improve_count"] >= early_stopping_patience:
+            study.stop()
+
+    study = optuna.create_study(
+        direction="maximize",
+        pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=2),
+    )
+    study.optimize(objective, n_trials=n_trials, callbacks=[early_stop_callback])
 
     best_params: Dict[str, int | float | str | None] = dict(study.best_params)
     best_params["random_state"] = 42
@@ -169,6 +196,7 @@ def tune_hyperparameters(train_df: pd.DataFrame, n_trials: int = 30) -> Dict[str
     best_params["n_jobs"] = -1
 
     print("Best CV F1:", round(study.best_value, 4))
+    print("Completed Optuna trials:", len(study.trials))
     print("Best Optuna params:", best_params)
     return best_params
 
@@ -210,7 +238,7 @@ def run_pipeline(base_dir: Path) -> None:
     print("Train month range:", train_df["MonthEnd"].min(), "to", train_df["MonthEnd"].max())
     print("Test month range:", test_df["MonthEnd"].min(), "to", test_df["MonthEnd"].max())
 
-    best_params = tune_hyperparameters(train_df, n_trials=30)
+    best_params = tune_hyperparameters(train_df, n_trials=3)
     model = train_classifier(train_df, best_params)
     y_pred, _ = evaluate_classifier(model, test_df)
 
