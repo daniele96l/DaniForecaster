@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Tuple
+from typing import Dict, Tuple
 
+import optuna
 import pandas as pd
 from pandas.tseries.offsets import MonthEnd
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
 
 
 FEATURE_COLS = [
@@ -98,16 +99,82 @@ def time_split(model_df: pd.DataFrame, split_ratio: float = 0.8) -> Tuple[pd.Dat
     return train_df, test_df
 
 
-def train_classifier(train_df: pd.DataFrame) -> RandomForestClassifier:
+def get_class_weight(train_df: pd.DataFrame) -> str | None:
     class_counts = train_df["next_month_up"].value_counts(normalize=True)
-    class_weight = "balanced" if class_counts.min() < 0.4 else None
+    return "balanced" if class_counts.min() < 0.4 else None
 
-    model = RandomForestClassifier(
-        n_estimators=300,
-        max_depth=8,
-        random_state=42,
-        class_weight=class_weight,
-    )
+
+def get_time_cv_splits(train_df: pd.DataFrame, n_splits: int = 5) -> list[Tuple[pd.DataFrame, pd.DataFrame]]:
+    months = sorted(train_df["MonthEnd"].unique())
+    total_months = len(months)
+    step = max(1, total_months // (n_splits + 1))
+    splits: list[Tuple[pd.DataFrame, pd.DataFrame]] = []
+
+    for split_num in range(1, n_splits + 1):
+        valid_start_idx = split_num * step
+        valid_end_idx = min(valid_start_idx + step, total_months)
+        if valid_start_idx >= total_months:
+            break
+
+        valid_months = months[valid_start_idx:valid_end_idx]
+        if not valid_months:
+            continue
+
+        train_fold = train_df[train_df["MonthEnd"] < valid_months[0]].copy()
+        valid_fold = train_df[train_df["MonthEnd"].isin(valid_months)].copy()
+        if train_fold.empty or valid_fold.empty:
+            continue
+
+        splits.append((train_fold, valid_fold))
+
+    if not splits:
+        raise ValueError("Unable to build time-based CV splits. Check train data size.")
+    return splits
+
+
+def cross_validate_params(train_df: pd.DataFrame, params: Dict[str, int | float | str | None]) -> float:
+    cv_splits = get_time_cv_splits(train_df, n_splits=5)
+    fold_scores = []
+    for train_fold, valid_fold in cv_splits:
+        model = RandomForestClassifier(**params)
+        model.fit(train_fold[FEATURE_COLS], train_fold["next_month_up"])
+        pred = model.predict(valid_fold[FEATURE_COLS])
+        fold_scores.append(f1_score(valid_fold["next_month_up"], pred))
+    return float(sum(fold_scores) / len(fold_scores))
+
+
+def tune_hyperparameters(train_df: pd.DataFrame, n_trials: int = 30) -> Dict[str, int | float | str | None]:
+    class_weight = get_class_weight(train_df)
+
+    def objective(trial: optuna.trial.Trial) -> float:
+        params: Dict[str, int | float | str | None] = {
+            "n_estimators": trial.suggest_int("n_estimators", 100, 700),
+            "max_depth": trial.suggest_int("max_depth", 3, 16),
+            "min_samples_split": trial.suggest_int("min_samples_split", 2, 30),
+            "min_samples_leaf": trial.suggest_int("min_samples_leaf", 1, 20),
+            "max_features": trial.suggest_categorical("max_features", ["sqrt", "log2", None]),
+            "bootstrap": trial.suggest_categorical("bootstrap", [True, False]),
+            "random_state": 42,
+            "class_weight": class_weight,
+            "n_jobs": -1,
+        }
+        return cross_validate_params(train_df, params)
+
+    study = optuna.create_study(direction="maximize")
+    study.optimize(objective, n_trials=n_trials)
+
+    best_params: Dict[str, int | float | str | None] = dict(study.best_params)
+    best_params["random_state"] = 42
+    best_params["class_weight"] = class_weight
+    best_params["n_jobs"] = -1
+
+    print("Best CV F1:", round(study.best_value, 4))
+    print("Best Optuna params:", best_params)
+    return best_params
+
+
+def train_classifier(train_df: pd.DataFrame, params: Dict[str, int | float | str | None]) -> RandomForestClassifier:
+    model = RandomForestClassifier(**params)
     model.fit(train_df[FEATURE_COLS], train_df["next_month_up"])
     return model
 
@@ -143,7 +210,8 @@ def run_pipeline(base_dir: Path) -> None:
     print("Train month range:", train_df["MonthEnd"].min(), "to", train_df["MonthEnd"].max())
     print("Test month range:", test_df["MonthEnd"].min(), "to", test_df["MonthEnd"].max())
 
-    model = train_classifier(train_df)
+    best_params = tune_hyperparameters(train_df, n_trials=30)
+    model = train_classifier(train_df, best_params)
     y_pred, _ = evaluate_classifier(model, test_df)
 
     predictions_df = test_df[["Ticker", "MonthEnd", "next_month_up"]].copy()
