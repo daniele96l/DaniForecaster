@@ -870,14 +870,14 @@ def cross_validate_params(
 def tune_hyperparameters(
     train_df: pd.DataFrame, n_trials: int | None = None, early_stopping_patience: int = 10
 ) -> Dict[str, Any]:
-    n_trials = n_trials or get_adaptive_n_trials(train_df)
+    n_trials = 5  # hardcoded for now (ignores n_trials arg and adaptive rule)
     pipeline_emit(
         "tune",
         "hyperopt_start",
         n_trials=n_trials,
         early_stopping_patience=early_stopping_patience,
         train_rows=len(train_df),
-        adaptive_n_trials_rule="n_rows<1200->min(18); n_rows<3000->min(26,50); else 50",
+        adaptive_n_trials_rule="disabled_hardcoded_5",
         optuna_objective_name="mean_time_series_cv_balanced_accuracy",
         optuna_objective_sklearn_metric="balanced_accuracy_score",
         optuna_objective_description=(
@@ -1014,6 +1014,91 @@ def train_classifier(
     return train_model(train_df, params)
 
 
+def _class_label_human(c: int) -> str:
+    return {-1: "down(-1)", 0: "neutral(0)", 1: "up(+1)"}.get(int(c), str(int(c)))
+
+
+def _emit_run_end_readable_eval(
+    test_df: pd.DataFrame,
+    y_true: pd.Series,
+    y_pred: pd.Series,
+    proba_test: np.ndarray,
+) -> Dict[str, Any]:
+    """Emit JSONL digest: explained confusion matrix + concrete correct/wrong examples. Returns a small dict for artifacts."""
+    labels = np.array([-1, 0, 1], dtype=int)
+    cm3 = confusion_matrix(y_true, y_pred, labels=labels)
+    header = [int(x) for x in labels]
+    ascii_lines = ["(rows = true class, columns = predicted class; diagonal = correct for that true class)"]
+    ascii_lines.append("           " + "  ".join(f"pred_{c}" for c in header))
+    for i, ti in enumerate(header):
+        row = "  ".join(str(int(cm3[i, j])).rjust(8) for j in range(len(header)))
+        ascii_lines.append(f"true_{ti:>3}   {row}")
+    ascii_sketch = "\n".join(ascii_lines)
+
+    reset = test_df.reset_index(drop=True)
+    yt = y_true.reset_index(drop=True).astype(int)
+    yp = y_pred.reset_index(drop=True).astype(int)
+    match = (yt.values == yp.values).astype(bool)
+    max_p = np.max(proba_test, axis=1)
+    examples: list[Dict[str, Any]] = []
+    for k in range(len(reset)):
+        examples.append(
+            {
+                "Ticker": str(reset.loc[k, "Ticker"]),
+                "MonthEnd": str(reset.loc[k, "MonthEnd"]),
+                "actual_class": int(yt.iloc[k]),
+                "actual_label": _class_label_human(int(yt.iloc[k])),
+                "predicted_class": int(yp.iloc[k]),
+                "predicted_label": _class_label_human(int(yp.iloc[k])),
+                "was_correct": bool(match[k]),
+                "confidence_max_class_prob": round(float(max_p[k]), 4),
+            }
+        )
+    correct_examples = [e for e in examples if e["was_correct"]][:15]
+    wrong_examples = [e for e in examples if not e["was_correct"]][:15]
+    n_ok = int(match.sum())
+    n_bad = int(len(match) - n_ok)
+    acc = float(n_ok / len(match)) if len(match) else None
+
+    pipeline_emit(
+        "eval",
+        "run_end_confusion_matrix_explained",
+        columns_predicted_class=header,
+        rows_true_class=header,
+        counts_matrix_row_major=cm3.tolist(),
+        interpretation=(
+            "counts_matrix_row_major[i][j] = number of test rows where true_class==rows_true_class[i] "
+            "and predicted_class==columns_predicted_class[j]. Diagonal = correct for that true class."
+        ),
+        confusion_ascii_sketch=ascii_sketch,
+        per_true_class_row_totals={str(int(labels[i])): int(cm3[i].sum()) for i in range(len(labels))},
+        per_pred_class_column_totals={str(int(labels[j])): int(cm3[:, j].sum()) for j in range(len(labels))},
+    )
+    pipeline_emit(
+        "eval",
+        "run_end_prediction_examples",
+        n_test_rows=len(reset),
+        n_correct=n_ok,
+        n_wrong=n_bad,
+        headline_accuracy_plain=acc,
+        examples_correct_up_to_15=correct_examples,
+        examples_wrong_up_to_15=wrong_examples,
+        how_to_read_wrong_examples=(
+            "Each wrong row: actual_* is the real next-month label; predicted_* is what the model chose. "
+            "confidence_max_class_prob is max softmax probability among classes."
+        ),
+    )
+    return {
+        "confusion_matrix_3x3": cm3.tolist(),
+        "confusion_ascii_sketch": ascii_sketch,
+        "n_correct": n_ok,
+        "n_wrong": n_bad,
+        "headline_accuracy_plain": acc,
+        "examples_correct_up_to_15": correct_examples,
+        "examples_wrong_up_to_15": wrong_examples,
+    }
+
+
 def evaluate_classifier(
     model: RandomForestClassifier | ExtraTreesClassifier,
     test_df: pd.DataFrame,
@@ -1122,6 +1207,8 @@ def evaluate_classifier(
         confusion_matrix_row_normalized=cm_entry["row_normalized_recall_view"],
         feature_importance_top5=importance.head(5).to_dict(orient="records"),
     )
+    readable_digest = _emit_run_end_readable_eval(test_df, y_true, y_pred, proba_test)
+    diagnostics["readable_run_end"] = readable_digest
     return y_pred, importance, metrics
 
 
@@ -1174,7 +1261,7 @@ def run_pipeline(
         print("Test month range:", test_df["MonthEnd"].min(), "to", test_df["MonthEnd"].max())
         print_class_balance(train_df)
 
-        best_params = tune_hyperparameters(train_df, n_trials=None)
+        best_params = tune_hyperparameters(train_df)
         pipeline_emit(
             "train",
             "final_model_fit_start",
@@ -1228,6 +1315,19 @@ def run_pipeline(
             "artifacts_written",
             predictions_csv=str(predictions_path.resolve()),
             monthly_features_csv=str(features_path.resolve()),
+            training_artifacts_json=str(artifacts_path.resolve()),
+        )
+        pipeline_emit(
+            "summary",
+            "run_finished_where_to_look",
+            message=(
+                "End-of-run human-readable eval is in JSONL events: "
+                "eval/run_end_confusion_matrix_explained and eval/run_end_prediction_examples; "
+                "also duplicated under metrics.diagnostics.readable_run_end in the artifacts JSON."
+            ),
+            test_accuracy=metrics.get("accuracy"),
+            test_balanced_accuracy=metrics.get("balanced_accuracy"),
+            predictions_csv=str(predictions_path.resolve()),
             training_artifacts_json=str(artifacts_path.resolve()),
         )
         pipeline_emit(
