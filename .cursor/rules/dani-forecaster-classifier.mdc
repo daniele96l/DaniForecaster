@@ -1,0 +1,48 @@
+---
+description: DaniForecaster Nasdaq monthly direction classifier — domain, data, methodology, artifacts, and logging
+alwaysApply: true
+---
+
+# DaniForecaster: Nasdaq next-month classifier
+
+## Purpose
+
+Single-script pipeline ([nasdaq_next_month_classifier.py](nasdaq_next_month_classifier.py)) that predicts **next calendar month’s directional move** from **monthly (or resampled) open prices** per ticker: **3-class** problem **down (-1)**, **neutral (0)**, **up (+1)** relative to a fixed **neutral return band** (`NEUTRAL_RETURN_BAND`, default 0.02). Not intraday trading code; horizon is **one month ahead** per row.
+
+## Data contract
+
+- **Primary input**: `base_dir/df_nasdaq_monthly.csv` with at least `Ticker`, `MonthEnd`, `Open` (and label construction uses sorted time within ticker).
+- **Fallback**: `base_dir/df_nasdaq_eod.csv` with `Ticker`, `Date`, `Open` → aggregated to month-end via **first Open in each calendar month** (`MonthEnd` frequency).
+- **Labels**: `next_month_up` from **next row** `Open` within ticker: return \(=\) `Open[t+1]/Open[t] - 1`; map to {-1,0,1} vs band; last month per ticker is NA and dropped for modeling.
+
+## Feature engineering (must stay consistent with `FEATURE_COLS` + `FEATURE_ENGINEERING_SPEC`)
+
+- All transforms are **within-ticker** (`groupby("Ticker")`): pct_change, shifts, rolling stats on **open_pct_change_1m** (after clipping), and **Open vs rolling mean** ratios.
+- **Clipping**: 1m pct change in [-0.35, 0.35]; 3m in [-0.7, 0.7].
+- **Training rows**: `dropna` on `next_month_up` and every column in `FEATURE_COLS`. Any change to features must update **both** `FEATURE_COLS` and `FEATURE_ENGINEERING_SPEC["feature_list"]` / `model_uses_columns`.
+
+## Temporal methodology (no random k-fold on rows)
+
+- **Train/test**: `time_split` — contiguous holdout: either **fixed** last `max(min_test_months, round((1-split_ratio)*M))` months (legacy) or **`randomize_test_window=True`** (default in `run_pipeline`): sample test length uniformly in `[min_test_months, M - min_train_months_left]` using `split_seed` + `np.random.default_rng` (still strictly past train / future test, no shuffle within time). OHLCV monthly bars: EOD resamples Open first / High max / Low min / Close last / Volume sum when columns exist; missing OHLCV on CSV filled via `ensure_ohlcv_columns` (Volume→0).
+- **Hyperparameter tuning**: **Optuna** maximizes **mean time-series CV balanced accuracy** (`sklearn.metrics.balanced_accuracy_score`, mean over folds)—**not** accuracy, macro-F1, or log-loss. `trial.value` in logs is only that objective. Logs also record **mean CV accuracy** per trial (`mean_cv_accuracy` user attr / `optuna_trial_complete`) on the same folds for apples-to-apples comparison to majority-class baselines; it is **not** optimized. See `hyperopt_start` JSONL fields `optuna_objective_*` and `parallel_logged_metric`.
+- **Pruning / early stop**: **MedianPruner** + custom **early stopping** on study plateau.
+- **Models**: `RandomForestClassifier` or `ExtraTreesClassifier`; `class_weight` from categorical modes including manual minority boost.
+
+## Outputs (written under `base_dir`)
+
+- `next_month_up_predictions.csv` — test window predictions + class probabilities.
+- `df_nasdaq_monthly_features.csv` — full monthly panel with engineered features (recomputed from loaded monthly frame).
+- `next_month_up_training_artifacts.json` — seed, best params, headline metrics, **nested `metrics["diagnostics"]`** (full eval, baselines, drift, CV fold table references as built in code).
+- `logs/run_<UTC>_<id>.jsonl` — **append-flush JSONL** per event (`phase`, `event`, `data`); safe for crash mid-run.
+
+## Logging and evaluation philosophy
+
+- **JSONL** is the machine-readable trace for debugging (load → features → split → balance → Optuna trials → train → eval → export).
+- **Diagnostics** on test include proper scoring rules (**log loss**, **multiclass Brier**), **ROC-AUC OvR**, **kappa / MCC**, per-class PRF, **probability diagnostics**, **dummy baselines**, **train vs test gap**, **feature mean shift** train→test, **CV fold breakdown** for best params, **Optuna study distribution**. When extending metrics, keep artifacts **JSON-serializable** (`default=str` where needed).
+
+## Implementation conventions
+
+- **Reproducibility**: `GLOBAL_SEED` for Python, NumPy, Optuna sampler, dummies.
+- **Do not** shuffle time-ordered data for train/test. **Do** preserve ticker grouping for any new feature.
+- Prefer extending **`pipeline_emit`** + structured `data` over ad-hoc prints when adding new stages.
+- If adding dependencies, keep the script **runnable as a single file** unless the repo is refactored to a package.

@@ -1,7 +1,10 @@
 next-view/node_modules
 next-view/.next
 .idea
-.cursor
+.cursor/*
+!.cursor/rules/
 .DS_Store
 ~$Wind.xlsx
+
+logs/
 
