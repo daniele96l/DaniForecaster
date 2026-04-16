@@ -20,6 +20,7 @@ Single-script pipeline ([nasdaq_next_month_classifier.py](nasdaq_next_month_clas
 - All transforms are **within-ticker** (`groupby("Ticker")`): pct_change, shifts, rolling stats on **open_pct_change_1m** (after clipping), and **Open vs rolling mean** ratios.
 - **Clipping**: 1m pct change in [-0.35, 0.35]; 3m in [-0.7, 0.7].
 - **Training rows**: `dropna` on `next_month_up` and every column in `FEATURE_COLS`. Any change to features must update **both** `FEATURE_COLS` and `FEATURE_ENGINEERING_SPEC["feature_list"]` / `model_uses_columns`.
+- **No same-month Close in `FEATURE_COLS`**: label is `Open[t+1]/Open[t]-1`; month-t **Close** often tracks **Open[t+1]**, so `(Close/Open)-1` and other Close-only paths are **not** model inputs (HL range and volume still allowed).
 
 ## Temporal methodology (no random k-fold on rows)
 

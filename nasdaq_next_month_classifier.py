@@ -51,10 +51,6 @@ FEATURE_COLS = [
     "open_vs_roll9",
     "open_vs_roll3",
     "hl_range_over_open",
-    "close_over_open_ret",
-    "close_pct_change_1m",
-    "close_pct_change_3m",
-    "close_vs_roll6",
     "volume_log1p",
     "volume_pct_change_1m",
     "volume_roll_z_6",
@@ -148,22 +144,6 @@ FEATURE_ENGINEERING_SPEC: Dict[str, Any] = {
             "formula": "(High-Low)/Open clipped [0, 0.6]; intramonth range vs open",
         },
         {
-            "column": "close_over_open_ret",
-            "formula": "(Close/Open)-1 clipped [-0.25, 0.25]",
-        },
-        {
-            "column": "close_pct_change_1m",
-            "formula": "groupby(Ticker) Close.pct_change(1) clipped like open 1m",
-        },
-        {
-            "column": "close_pct_change_3m",
-            "formula": "groupby(Ticker) Close.pct_change(3) clipped",
-        },
-        {
-            "column": "close_vs_roll6",
-            "formula": "(Close / rolling_mean(Close,6)) - 1 per ticker",
-        },
-        {
             "column": "volume_log1p",
             "formula": "log1p(max(Volume,0)) per row",
         },
@@ -177,7 +157,12 @@ FEATURE_ENGINEERING_SPEC: Dict[str, Any] = {
         },
     ],
     "model_uses_columns": FEATURE_COLS,
-    "notes": "All rolling/shift/pct_change are computed within each Ticker group. Training drops rows with NA in any of FEATURE_COLS or next_month_up.",
+    "notes": (
+        "All rolling/shift/pct_change are computed within each Ticker group. Training drops rows with NA in any of "
+        "FEATURE_COLS or next_month_up. Same-month Close-derived features are intentionally omitted: the target is "
+        "Open[t+1]/Open[t]-1, and month-t Close is often an economic proxy for Open[t+1], which can dominate "
+        "importance without true calendar lookahead."
+    ),
 }
 
 _pipeline_log_fp: Optional[TextIO] = None
@@ -516,12 +501,6 @@ def add_open_price_features(monthly: pd.DataFrame) -> pd.DataFrame:
 
     safe_open = out["Open"].replace(0, np.nan)
     out["hl_range_over_open"] = ((out["High"] - out["Low"]) / safe_open).clip(lower=0.0, upper=0.6)
-    out["close_over_open_ret"] = ((out["Close"] / safe_open) - 1).clip(-0.25, 0.25)
-
-    grouped_close = out.groupby("Ticker")["Close"]
-    out["close_pct_change_1m"] = grouped_close.pct_change(1).clip(-0.35, 0.35)
-    out["close_pct_change_3m"] = grouped_close.pct_change(3).clip(-0.7, 0.7)
-    out["close_vs_roll6"] = (out["Close"] / grouped_close.transform(lambda s: s.rolling(window=6).mean())) - 1
 
     vol_nonneg = out.groupby("Ticker")["Volume"].transform(lambda s: np.maximum(s.astype(float), 0.0))
     out["volume_log1p"] = np.log1p(vol_nonneg)
