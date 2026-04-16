@@ -104,6 +104,17 @@ def get_class_weight(train_df: pd.DataFrame) -> str | None:
     return "balanced" if class_counts.min() < 0.4 else None
 
 
+def print_class_balance(train_df: pd.DataFrame) -> None:
+    class_counts = train_df["next_month_up"].value_counts().sort_index()
+    class_ratios = train_df["next_month_up"].value_counts(normalize=True).sort_index()
+    class_weight = get_class_weight(train_df)
+
+    print("Class distribution (train):")
+    for cls in class_counts.index:
+        print(f"  class {cls}: {class_counts[cls]} ({class_ratios[cls]:.2%})")
+    print("Class balancing mode:", class_weight if class_weight is not None else "none")
+
+
 def get_time_cv_splits(train_df: pd.DataFrame, n_splits: int = 5) -> list[Tuple[pd.DataFrame, pd.DataFrame]]:
     months = sorted(train_df["MonthEnd"].unique())
     total_months = len(months)
@@ -237,6 +248,7 @@ def run_pipeline(base_dir: Path) -> None:
     print("Train rows:", len(train_df), "Test rows:", len(test_df))
     print("Train month range:", train_df["MonthEnd"].min(), "to", train_df["MonthEnd"].max())
     print("Test month range:", test_df["MonthEnd"].min(), "to", test_df["MonthEnd"].max())
+    print_class_balance(train_df)
 
     best_params = tune_hyperparameters(train_df, n_trials=3)
     model = train_classifier(train_df, best_params)
