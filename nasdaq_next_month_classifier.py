@@ -22,7 +22,7 @@ from sklearn.metrics import (
 
 
 GLOBAL_SEED = 42
-NEUTRAL_RETURN_BAND = 0.005
+NEUTRAL_RETURN_BAND = 0.02
 FEATURE_COLS = [
     "open_pct_change_1m",
     "open_pct_change_3m",
