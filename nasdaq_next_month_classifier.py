@@ -22,6 +22,7 @@ from sklearn.metrics import (
 
 
 GLOBAL_SEED = 42
+NEUTRAL_RETURN_BAND = 0.005
 FEATURE_COLS = [
     "open_pct_change_1m",
     "open_pct_change_3m",
@@ -61,10 +62,12 @@ def daily_to_monthly(df: pd.DataFrame) -> pd.DataFrame:
 def add_next_month_direction(monthly: pd.DataFrame) -> pd.DataFrame:
     out = monthly.sort_values(["Ticker", "MonthEnd"]).copy()
     next_open = out.groupby("Ticker")["Open"].shift(-1)
+    next_return = (next_open / out["Open"]) - 1
     out["next_month_up"] = pd.Series(pd.NA, index=out.index, dtype="Int64")
-    out.loc[next_open > out["Open"], "next_month_up"] = 1
-    out.loc[next_open < out["Open"], "next_month_up"] = 0
-    out.loc[next_open.isna(), "next_month_up"] = pd.NA
+    out.loc[next_return > NEUTRAL_RETURN_BAND, "next_month_up"] = 1
+    out.loc[next_return < -NEUTRAL_RETURN_BAND, "next_month_up"] = -1
+    out.loc[next_return.abs() <= NEUTRAL_RETURN_BAND, "next_month_up"] = 0
+    out.loc[next_return.isna(), "next_month_up"] = pd.NA
     return out
 
 
@@ -106,12 +109,12 @@ def load_monthly_dataset(base_dir: Path) -> pd.DataFrame:
         df_monthly = pd.read_csv(monthly_path)
     elif eod_path.exists():
         df_eod = pd.read_csv(eod_path)
-        df_monthly = add_next_month_direction(daily_to_monthly(df_eod))
+        df_monthly = daily_to_monthly(df_eod)
     else:
         raise FileNotFoundError("Missing df_nasdaq_monthly.csv (or df_nasdaq_eod.csv fallback).")
 
     df_monthly["MonthEnd"] = pd.to_datetime(df_monthly["MonthEnd"])
-    return df_monthly
+    return add_next_month_direction(df_monthly)
 
 
 def build_model_dataset(df_monthly: pd.DataFrame) -> pd.DataFrame:
@@ -140,7 +143,7 @@ def time_split(
 
 def get_class_weight(train_df: pd.DataFrame) -> str | None:
     class_counts = train_df["next_month_up"].value_counts(normalize=True)
-    return "balanced" if class_counts.min() < 0.4 else None
+    return "balanced" if class_counts.min() < 0.28 else None
 
 
 def class_weight_from_mode(train_df: pd.DataFrame, mode: str) -> str | Dict[int, float] | None:
@@ -154,7 +157,8 @@ def class_weight_from_mode(train_df: pd.DataFrame, mode: str) -> str | Dict[int,
         "minority_x1.5": 1.5,
         "minority_x2.0": 2.0,
     }[mode]
-    weights: Dict[int, float] = {0: 1.0, 1: 1.0}
+    classes = sorted(train_df["next_month_up"].unique())
+    weights: Dict[int, float] = {int(cls): 1.0 for cls in classes}
     weights[minority_class] = weight_scale
     return weights
 
@@ -243,43 +247,29 @@ def train_model(train_fold: pd.DataFrame, params: Dict[str, Any]) -> RandomFores
     return model
 
 
-def tune_threshold(y_true: pd.Series, y_prob: np.ndarray) -> Tuple[float, float]:
-    best_threshold = 0.5
-    best_score = -1.0
-    for threshold in np.linspace(0.3, 0.7, 9):
-        y_pred = (y_prob >= threshold).astype(int)
-        score = balanced_accuracy_score(y_true, y_pred)
-        if score > best_score:
-            best_score = score
-            best_threshold = float(threshold)
-    return best_threshold, float(best_score)
-
-
 def cross_validate_params(
     train_df: pd.DataFrame,
     params: Dict[str, Any],
     trial: optuna.trial.Trial | None = None,
-) -> Tuple[float, float]:
+) -> float:
     cv_splits = get_time_cv_splits(train_df)
     fold_scores = []
-    fold_thresholds = []
     for fold_idx, (train_fold, valid_fold) in enumerate(cv_splits):
         model = train_model(train_fold, params)
-        valid_prob = model.predict_proba(valid_fold[FEATURE_COLS])[:, 1]
-        threshold, fold_score = tune_threshold(valid_fold["next_month_up"], valid_prob)
+        y_pred = model.predict(valid_fold[FEATURE_COLS])
+        fold_score = balanced_accuracy_score(valid_fold["next_month_up"], y_pred)
         fold_scores.append(fold_score)
-        fold_thresholds.append(threshold)
         if trial is not None:
             intermediate_score = float(sum(fold_scores) / len(fold_scores))
             trial.report(intermediate_score, step=fold_idx)
             if trial.should_prune():
                 raise optuna.exceptions.TrialPruned()
-    return float(sum(fold_scores) / len(fold_scores)), float(np.median(fold_thresholds))
+    return float(sum(fold_scores) / len(fold_scores))
 
 
 def tune_hyperparameters(
     train_df: pd.DataFrame, n_trials: int | None = None, early_stopping_patience: int = 10
-) -> Tuple[Dict[str, Any], float]:
+) -> Dict[str, Any]:
     n_trials = n_trials or get_adaptive_n_trials(train_df)
     tracker = {"best_score": float("-inf"), "no_improve_count": 0}
     class_weight_modes = ["none", "balanced", "balanced_subsample", "minority_x1.25", "minority_x1.5"]
@@ -299,8 +289,7 @@ def tune_hyperparameters(
             "class_weight": class_weight,
             "n_jobs": -1,
         }
-        cv_score, cv_threshold = cross_validate_params(train_df, params, trial=trial)
-        trial.set_user_attr("cv_threshold", cv_threshold)
+        cv_score = cross_validate_params(train_df, params, trial=trial)
         return cv_score
 
     def early_stop_callback(study: optuna.study.Study, current_trial: optuna.trial.FrozenTrial) -> None:
@@ -328,13 +317,11 @@ def tune_hyperparameters(
     best_params["class_weight"] = class_weight_from_mode(train_df, class_weight_mode)
     best_params["random_state"] = GLOBAL_SEED
     best_params["n_jobs"] = -1
-    best_threshold = float(best_trial.user_attrs.get("cv_threshold", 0.5))
 
     print("Best CV balanced accuracy:", round(study.best_value, 4))
     print("Completed Optuna trials:", len(study.trials))
     print("Best Optuna params:", best_params)
-    print("Best CV threshold:", round(best_threshold, 4))
-    return best_params, best_threshold
+    return best_params
 
 
 def train_classifier(
@@ -344,24 +331,22 @@ def train_classifier(
 
 
 def evaluate_classifier(
-    model: RandomForestClassifier | ExtraTreesClassifier, test_df: pd.DataFrame, threshold: float
+    model: RandomForestClassifier | ExtraTreesClassifier, test_df: pd.DataFrame
 ) -> Tuple[pd.Series, pd.DataFrame, Dict[str, float]]:
     y_true = test_df["next_month_up"]
-    y_prob = model.predict_proba(test_df[FEATURE_COLS])[:, 1]
-    y_pred = pd.Series((y_prob >= threshold).astype(int), index=test_df.index)
+    y_pred = pd.Series(model.predict(test_df[FEATURE_COLS]), index=test_df.index)
 
     accuracy = float(accuracy_score(y_true, y_pred))
     balanced_acc = float(balanced_accuracy_score(y_true, y_pred))
     macro_f1 = float(f1_score(y_true, y_pred, average="macro"))
-    recall_down = float(recall_score(y_true, y_pred, pos_label=0))
-    recall_up = float(recall_score(y_true, y_pred, pos_label=1))
+    recalls = recall_score(y_true, y_pred, labels=[-1, 0, 1], average=None, zero_division=0)
 
-    print("Threshold:", round(threshold, 4))
     print("Accuracy:", round(accuracy, 4))
     print("Balanced accuracy:", round(balanced_acc, 4))
     print("Macro F1:", round(macro_f1, 4))
-    print("Recall class 0 (down):", round(recall_down, 4))
-    print("Recall class 1 (up):", round(recall_up, 4))
+    print("Recall class -1 (down):", round(float(recalls[0]), 4))
+    print("Recall class 0 (neutral):", round(float(recalls[1]), 4))
+    print("Recall class 1 (up):", round(float(recalls[2]), 4))
     print("Confusion matrix:")
     print(confusion_matrix(y_true, y_pred))
     print("Classification report:")
@@ -378,9 +363,9 @@ def evaluate_classifier(
         "accuracy": accuracy,
         "balanced_accuracy": balanced_acc,
         "macro_f1": macro_f1,
-        "recall_class_0": recall_down,
-        "recall_class_1": recall_up,
-        "threshold": float(threshold),
+        "recall_class_neg1": float(recalls[0]),
+        "recall_class_0": float(recalls[1]),
+        "recall_class_1": float(recalls[2]),
     }
     return y_pred, importance, metrics
 
@@ -398,13 +383,17 @@ def run_pipeline(base_dir: Path) -> None:
     print("Test month range:", test_df["MonthEnd"].min(), "to", test_df["MonthEnd"].max())
     print_class_balance(train_df)
 
-    best_params, best_threshold = tune_hyperparameters(train_df, n_trials=None)
+    best_params = tune_hyperparameters(train_df, n_trials=None)
     model = train_classifier(train_df, best_params)
-    y_pred, importance, metrics = evaluate_classifier(model, test_df, threshold=best_threshold)
+    y_pred, importance, metrics = evaluate_classifier(model, test_df)
 
     predictions_df = test_df[["Ticker", "MonthEnd", "next_month_up"]].copy()
     predictions_df["pred_next_month_up"] = y_pred.values
-    predictions_df["pred_prob_up"] = model.predict_proba(test_df[FEATURE_COLS])[:, 1]
+    proba = model.predict_proba(test_df[FEATURE_COLS])
+    class_to_col = {-1: "pred_prob_neg1", 0: "pred_prob_0", 1: "pred_prob_1"}
+    for idx, cls in enumerate(model.classes_):
+        col_name = class_to_col.get(int(cls), f"pred_prob_class_{int(cls)}")
+        predictions_df[col_name] = proba[:, idx]
     predictions_df.to_csv(base_dir / "next_month_up_predictions.csv", index=False)
 
     featured_df = add_open_price_features(df_monthly)
